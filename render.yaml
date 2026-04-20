@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: tanzania-ecom-tracker-api
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: API_PORT
+        value: "4174"
+      - key: META_GRAPH_VERSION
+        value: v23.0
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+    disk:
+      name: workspace-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
