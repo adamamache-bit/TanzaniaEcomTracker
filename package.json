@@ -6,7 +6,7 @@
   "scripts": {
     "api": "node server.js",
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build --configLoader native",
     "lint": "eslint .",
     "preview": "vite preview"
   },
