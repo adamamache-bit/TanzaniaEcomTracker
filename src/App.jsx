@@ -1648,6 +1648,7 @@ export default function App() {
   const sharedVersionRef = useRef(0);
   const lastSharedPayloadRef = useRef("");
   const latestSharedStateRef = useRef({});
+  const queuedSharedSnapshotRef = useRef(null);
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1280 : window.innerWidth
   );
@@ -2137,59 +2138,45 @@ export default function App() {
     });
   }, [currentTime, tracking]);
 
-  useEffect(() => {
-    if (!sharedWorkspace.initialized) return;
-    if (sharedHydratingRef.current) return;
-    if (supabaseEnabled && !cloudAuth.user) return;
+  const persistSharedSnapshot = useCallback(
+    async function persistSharedSnapshotInner(
+      nextSnapshot,
+      {
+        progressNotice = supabaseEnabled ? "Saving cloud changes..." : "Saving shared workspace...",
+        successNotice = supabaseEnabled ? "Cloud workspace synced" : "Shared workspace synced",
+        failurePrefix = supabaseEnabled ? "Cloud workspace sync failed" : "Shared workspace sync failed",
+      } = {}
+    ) {
+      if (!sharedWorkspace.initialized) return true;
+      if (supabaseEnabled && !cloudAuth.user) return false;
 
-    const snapshot = buildSharedStateSnapshot();
-    const serialized = JSON.stringify(snapshot);
-    if (serialized === lastSharedPayloadRef.current) return;
+      const serialized = JSON.stringify(nextSnapshot || {});
+      if (serialized === lastSharedPayloadRef.current) return true;
 
-    let cancelled = false;
+      if (sharedSyncLockRef.current) {
+        queuedSharedSnapshotRef.current = {
+          snapshot: nextSnapshot,
+          options: { progressNotice, successNotice, failurePrefix },
+        };
+        return false;
+      }
 
-    const pushSharedWorkspace = async () => {
-      if (sharedSyncLockRef.current) return;
       sharedSyncLockRef.current = true;
-      setSharedWorkspace((prev) => ({ ...prev, saving: true }));
+      latestSharedStateRef.current = nextSnapshot;
+      lastSharedPayloadRef.current = serialized;
+      setSharedWorkspace((prev) => ({
+        ...prev,
+        mode: supabaseEnabled ? "cloud" : "shared",
+        available: true,
+        loading: false,
+        saving: true,
+        notice: progressNotice,
+      }));
+
       try {
         let payload;
         if (supabaseEnabled && cloudAuth.user) {
-          const remoteBeforeSave = await loadCloudWorkspace(supabaseWorkspaceId);
-          const remoteVersionBeforeSave = Number(remoteBeforeSave.version || 0);
-          const remoteStateBeforeSave = remoteBeforeSave.state || {};
-          const remoteSerializedBeforeSave = JSON.stringify(remoteStateBeforeSave);
-          const remoteHasDataBeforeSave = hasMeaningfulWorkspaceData(remoteStateBeforeSave);
-          const localHasDataBeforeSave = hasMeaningfulWorkspaceData(snapshot);
-          const remoteLooksFreshBeforeSave =
-            !remoteHasDataBeforeSave &&
-            remoteVersionBeforeSave <= 0 &&
-            !remoteBeforeSave.updatedAt;
-          const localVersionBeforeSave = Number(sharedVersionRef.current || 0);
-
-          if (
-            remoteSerializedBeforeSave !== lastSharedPayloadRef.current &&
-            remoteVersionBeforeSave >= localVersionBeforeSave &&
-            !(remoteLooksFreshBeforeSave && localHasDataBeforeSave)
-          ) {
-            applySharedStateSnapshot(remoteStateBeforeSave);
-            sharedVersionRef.current = remoteVersionBeforeSave;
-            lastSharedPayloadRef.current = remoteSerializedBeforeSave;
-            setSharedWorkspace((prev) => ({
-              ...prev,
-              mode: "cloud",
-              available: true,
-              loading: false,
-              saving: false,
-              initialized: true,
-              version: remoteVersionBeforeSave,
-              updatedAt: remoteBeforeSave.updatedAt || prev.updatedAt,
-              notice: "Cloud workspace updated before local sync",
-            }));
-            return;
-          }
-
-          const saved = await saveCloudWorkspace(snapshot, {
+          const saved = await saveCloudWorkspace(nextSnapshot, {
             workspaceId: supabaseWorkspaceId,
             userId: cloudAuth.user.id,
           });
@@ -2198,49 +2185,70 @@ export default function App() {
           const response = await fetch(getSharedApiBase(), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ state: snapshot }),
+            body: JSON.stringify({ state: nextSnapshot }),
           });
           const remotePayload = await response.json().catch(() => ({}));
-          if (!response.ok || !remotePayload?.ok) throw new Error(remotePayload?.error || "Unable to save shared workspace.");
+          if (!response.ok || !remotePayload?.ok) {
+            throw new Error(remotePayload?.error || "Unable to save shared workspace.");
+          }
           payload = remotePayload;
         }
-        if (cancelled) return;
+
         sharedVersionRef.current = Number(payload.version || sharedVersionRef.current || 0);
         lastSharedPayloadRef.current = serialized;
-        setSharedWorkspace({
+        setSharedWorkspace((prev) => ({
+          ...prev,
           mode: supabaseEnabled ? "cloud" : "shared",
           available: true,
           loading: false,
           saving: false,
           initialized: true,
           version: Number(payload.version || 0),
-          updatedAt: payload.updatedAt || null,
-          notice: supabaseEnabled ? "Cloud workspace synced" : "Shared workspace synced",
-        });
+          updatedAt: payload.updatedAt || prev.updatedAt || null,
+          notice: successNotice,
+        }));
+        return true;
       } catch (error) {
-        if (cancelled) return;
+        lastSharedPayloadRef.current = "";
         setSharedWorkspace((prev) => ({
           ...prev,
           mode: prev.available ? (supabaseEnabled ? "cloud" : "shared") : "local",
           available: prev.available,
           loading: false,
           saving: false,
-          notice: prev.available
-            ? (supabaseEnabled
-                ? `Cloud workspace sync delayed${error instanceof Error && error.message ? `: ${error.message}` : ""}`
-                : "Shared workspace sync delayed")
-            : "Local workspace mode",
+          notice: `${failurePrefix}${error instanceof Error && error.message ? `: ${error.message}` : ""}`,
         }));
+        return false;
       } finally {
         sharedSyncLockRef.current = false;
+        const queued = queuedSharedSnapshotRef.current;
+        queuedSharedSnapshotRef.current = null;
+        if (queued) {
+          window.setTimeout(() => {
+            void persistSharedSnapshotInner(queued.snapshot, queued.options);
+          }, 0);
+        }
       }
-    };
+    },
+    [cloudAuth.user, sharedWorkspace.initialized]
+  );
 
-    pushSharedWorkspace();
+  useEffect(() => {
+    if (!sharedWorkspace.initialized) return;
+    if (sharedHydratingRef.current) return;
+    if (supabaseEnabled && !cloudAuth.user) return;
+
+    const snapshot = buildSharedStateSnapshot();
+    latestSharedStateRef.current = snapshot;
+
+    const timeout = window.setTimeout(() => {
+      void persistSharedSnapshot(snapshot);
+    }, 180);
+
     return () => {
-      cancelled = true;
+      window.clearTimeout(timeout);
     };
-  }, [applySharedStateSnapshot, buildSharedStateSnapshot, cloudAuth.user, sharedWorkspace.initialized]);
+  }, [buildSharedStateSnapshot, cloudAuth.user, persistSharedSnapshot, sharedWorkspace.initialized]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2373,63 +2381,19 @@ export default function App() {
 
   const persistProductsSnapshot = useCallback(
     async (nextProducts, notice = "Cloud product catalog synced") => {
-      if (!supabaseEnabled || !cloudAuth.user || !sharedWorkspace.initialized) return true;
-
       const nextSnapshot = {
         ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
         products: nextProducts.map(sanitizeProductRecord),
       };
-      const serialized = JSON.stringify(nextSnapshot);
 
-      if (sharedSyncLockRef.current) return false;
-
-      sharedSyncLockRef.current = true;
       latestSharedStateRef.current = nextSnapshot;
-      lastSharedPayloadRef.current = serialized;
-      setSharedWorkspace((prev) => ({
-        ...prev,
-        mode: "cloud",
-        available: true,
-        loading: false,
-        saving: true,
-        notice: "Saving product changes to cloud...",
-      }));
-
-      try {
-        const saved = await saveCloudWorkspace(nextSnapshot, {
-          workspaceId: supabaseWorkspaceId,
-          userId: cloudAuth.user.id,
-        });
-
-        sharedVersionRef.current = Number(saved.version || 0);
-        setSharedWorkspace((prev) => ({
-          ...prev,
-          mode: "cloud",
-          available: true,
-          loading: false,
-          saving: false,
-          initialized: true,
-          version: Number(saved.version || 0),
-          updatedAt: saved.updatedAt || prev.updatedAt,
-          notice,
-        }));
-        return true;
-      } catch (error) {
-        lastSharedPayloadRef.current = "";
-        setSharedWorkspace((prev) => ({
-          ...prev,
-          mode: "cloud",
-          available: true,
-          loading: false,
-          saving: false,
-          notice: `Cloud product sync failed${error instanceof Error && error.message ? `: ${error.message}` : ""}`,
-        }));
-        return false;
-      } finally {
-        sharedSyncLockRef.current = false;
-      }
+      return persistSharedSnapshot(nextSnapshot, {
+        progressNotice: "Saving product changes to cloud...",
+        successNotice: notice,
+        failurePrefix: "Cloud product sync failed",
+      });
     },
-    [cloudAuth.user, sharedWorkspace.initialized]
+    [persistSharedSnapshot]
   );
 
   const getProduct = useCallback((id) => products.find((p) => p.id === id), [products]);
