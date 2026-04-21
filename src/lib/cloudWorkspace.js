@@ -74,10 +74,11 @@ export async function saveCloudWorkspace(state, { workspaceId = supabaseWorkspac
   if (!supabaseEnabled || !supabase) throw new Error("Supabase is not configured.");
 
   const current = await loadCloudWorkspace(workspaceId);
+  const nextVersion = Math.max(Number(current.version || 0) + 1, Date.now());
   const payload = {
     id: workspaceId,
     name: "Main Workspace",
-    version: Number(current.version || 0) + 1,
+    version: nextVersion,
     updated_at: new Date().toISOString(),
     updated_by: userId,
     state,
@@ -123,4 +124,3 @@ export function subscribeToCloudWorkspace(workspaceId = supabaseWorkspaceId, onC
     supabase.removeChannel(channel);
   };
 }
-
