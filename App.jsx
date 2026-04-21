@@ -4555,94 +4555,23 @@ export default function App() {
     [productDetailsRows, productDetailsFilters.rowLimit]
   );
 
-  if (supabaseEnabled && cloudAuth.ready && !cloudAuth.user) {
-    return (
-      <div style={styles.shell}>
-        <div
-          style={{
-            minHeight: "100vh",
-            display: "grid",
-            placeItems: "center",
-            padding: isCompact ? 18 : 32,
-            background:
-              "radial-gradient(circle at top left, rgba(35,88,213,0.12), transparent 32%), radial-gradient(circle at top right, rgba(31,143,95,0.10), transparent 28%), linear-gradient(180deg, #f6f8fc 0%, #eef3fb 100%)",
-          }}
-        >
-          <div
-            style={{
-              width: "100%",
-              maxWidth: 1100,
-              display: "grid",
-              gridTemplateColumns: responsiveColumns("minmax(0, 1.05fr) minmax(360px, 0.95fr)", "1fr", "1fr"),
-              gap: 20,
-              alignItems: "stretch",
-            }}
-          >
-            <div style={{ ...styles.card, padding: isCompact ? 24 : 34, display: "grid", alignContent: "center" }}>
-              <div style={styles.sectionEyebrow}>Private cloud workspace</div>
-              <div style={{ fontSize: isCompact ? 34 : 48, fontWeight: 900, lineHeight: 1.02, marginTop: 10, maxWidth: 580 }}>
-                Tanzania Ecom Tracker
-              </div>
-              <div style={{ color: textSoft, marginTop: 14, lineHeight: 1.7, maxWidth: 620, fontSize: 16 }}>
-                Connect with your email to open the live workspace. Only authenticated users can see products, orders, metrics and all business actions.
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "1fr 1fr", "1fr"),
-                  gap: 12,
-                  marginTop: 24,
-                }}
-              >
-                <MiniStat label="Live collaboration" value="Shared" tone="blue" sub="You and your cofounder see the same workspace" />
-                <MiniStat label="Auto save" value="Always on" tone="green" sub="Each change is saved automatically" />
-                <MiniStat label="Access" value="Protected" tone="amber" sub="Login required before opening the app" />
-              </div>
-            </div>
-
-            <div style={{ ...styles.card, padding: isCompact ? 22 : 30, display: "grid", alignContent: "center" }}>
-              <div style={styles.sectionEyebrow}>Cloud access</div>
-              <div style={{ fontSize: 28, fontWeight: 900, marginTop: 10 }}>Sign in to open the live app</div>
-              <div style={{ color: textSoft, marginTop: 8, lineHeight: 1.6 }}>
-                {cloudAuth.notice}
-              </div>
-              <div style={{ display: "grid", gap: 12, marginTop: 22 }}>
-                <input
-                  style={styles.input}
-                  type="email"
-                  placeholder="Email"
-                  value={cloudAuth.email}
-                  onChange={(e) => setCloudAuth((prev) => ({ ...prev, email: e.target.value }))}
-                />
-                <input
-                  style={styles.input}
-                  type="password"
-                  placeholder="Password"
-                  value={cloudAuth.password}
-                  onChange={(e) => setCloudAuth((prev) => ({ ...prev, password: e.target.value }))}
-                />
-                <select
-                  style={styles.input}
-                  value={cloudAuth.mode}
-                  onChange={(e) => setCloudAuth((prev) => ({ ...prev, mode: e.target.value }))}
-                >
-                  <option value="signin">Sign in</option>
-                  <option value="signup">Create access</option>
-                </select>
-                <button style={{ ...styles.btnPrimary, minHeight: 56 }} onClick={submitCloudAuth} disabled={cloudAuth.loading}>
-                  {cloudAuth.loading ? "Connecting..." : cloudAuth.mode === "signup" ? "Create cloud access" : "Open cloud workspace"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      );
-    }
+  const showCloudLoginGate = supabaseEnabled && cloudAuth.ready && !cloudAuth.user;
+  const showWorkspaceSyncNotice =
+    Boolean(sharedWorkspace.notice) &&
+    /(failed|unavailable|offline|delayed|error)/i.test(sharedWorkspace.notice);
 
   return (
     <div style={styles.shell}>
-      <div style={{ ...styles.layout, gridTemplateColumns: isCompact ? "1fr" : "260px 1fr" }}>
+      <div
+        style={{
+          ...styles.layout,
+          gridTemplateColumns: isCompact ? "1fr" : "260px 1fr",
+          filter: showCloudLoginGate ? "blur(10px)" : "none",
+          pointerEvents: showCloudLoginGate ? "none" : "auto",
+          userSelect: showCloudLoginGate ? "none" : "auto",
+          transition: "filter 160ms ease",
+        }}
+      >
         <aside style={{ ...styles.sidebar, borderRight: isCompact ? "none" : `1px solid ${cardBorder}`, borderBottom: isCompact ? `1px solid ${cardBorder}` : "none" }}>
           <div style={{ ...styles.brandPanel, marginBottom: 28 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -4731,9 +4660,11 @@ export default function App() {
                 <div style={{ color: textSoft, marginTop: 6, fontSize: 13 }}>
                   Last shipping import: {shippingImportReminder.lastShippingImportLabel}
                 </div>
-                <div style={{ color: textSoft, marginTop: 6, fontSize: 13 }}>
-                  Workspace sync: {sharedWorkspace.notice}{sharedWorkspace.updatedAt ? ` | ${new Date(sharedWorkspace.updatedAt).toLocaleString()}` : ""}
-                </div>
+                {showWorkspaceSyncNotice ? (
+                  <div style={{ color: textSoft, marginTop: 6, fontSize: 13 }}>
+                    Workspace sync: {sharedWorkspace.notice}{sharedWorkspace.updatedAt ? ` | ${new Date(sharedWorkspace.updatedAt).toLocaleString()}` : ""}
+                  </div>
+                ) : null}
                 {supabaseEnabled ? (
                   <div style={{ ...styles.softStat, marginTop: 16, background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,248,255,0.9))" }}>
                     <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: accent }}>Cloud access</div>
@@ -8039,6 +7970,55 @@ export default function App() {
           </div>
         </main>
       </div>
+      {showCloudLoginGate ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 80,
+            display: "grid",
+            placeItems: "center",
+            padding: isCompact ? 18 : 32,
+            background: "rgba(240, 246, 255, 0.38)",
+            backdropFilter: "blur(14px)",
+          }}
+        >
+          <div style={{ ...styles.card, width: "100%", maxWidth: 520, padding: isCompact ? 22 : 28 }}>
+            <div style={styles.sectionEyebrow}>Cloud access</div>
+            <div style={{ fontSize: 30, fontWeight: 900, marginTop: 10 }}>Sign in to continue</div>
+            <div style={{ color: textSoft, marginTop: 8, lineHeight: 1.6 }}>
+              {cloudAuth.notice || "Use your email to open the live shared workspace."}
+            </div>
+            <div style={{ display: "grid", gap: 12, marginTop: 22 }}>
+              <input
+                style={styles.input}
+                type="email"
+                placeholder="Email"
+                value={cloudAuth.email}
+                onChange={(e) => setCloudAuth((prev) => ({ ...prev, email: e.target.value }))}
+              />
+              <input
+                style={styles.input}
+                type="password"
+                placeholder="Password"
+                value={cloudAuth.password}
+                onChange={(e) => setCloudAuth((prev) => ({ ...prev, password: e.target.value }))}
+              />
+              <select
+                style={styles.input}
+                value={cloudAuth.mode}
+                onChange={(e) => setCloudAuth((prev) => ({ ...prev, mode: e.target.value }))}
+              >
+                <option value="signin">Sign in</option>
+                <option value="signup">Create access</option>
+              </select>
+              <button style={{ ...styles.btnPrimary, minHeight: 56 }} onClick={submitCloudAuth} disabled={cloudAuth.loading}>
+                {cloudAuth.loading ? "Connecting..." : cloudAuth.mode === "signup" ? "Create cloud access" : "Open cloud workspace"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
