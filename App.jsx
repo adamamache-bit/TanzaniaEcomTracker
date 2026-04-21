@@ -4555,32 +4555,7 @@ export default function App() {
     [productDetailsRows, productDetailsFilters.rowLimit]
   );
 
-  if (supabaseEnabled && !cloudAuth.ready) {
-    return (
-      <div style={styles.shell}>
-        <div
-          style={{
-            minHeight: "100vh",
-            display: "grid",
-            placeItems: "center",
-            padding: isCompact ? 18 : 32,
-            background:
-              "radial-gradient(circle at top left, rgba(35,88,213,0.12), transparent 32%), radial-gradient(circle at top right, rgba(31,143,95,0.10), transparent 28%), linear-gradient(180deg, #f6f8fc 0%, #eef3fb 100%)",
-          }}
-        >
-          <div style={{ ...styles.card, width: "100%", maxWidth: 560, textAlign: "center", padding: 28 }}>
-            <div style={styles.sectionEyebrow}>Cloud access</div>
-            <div style={{ marginTop: 10, fontSize: 28, fontWeight: 900 }}>Opening your workspace</div>
-            <div style={{ color: textSoft, marginTop: 10, lineHeight: 1.6 }}>
-              Checking your session and preparing the live data feed.
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (supabaseEnabled && !cloudAuth.user) {
+  if (supabaseEnabled && cloudAuth.ready && !cloudAuth.user) {
     return (
       <div style={styles.shell}>
         <div
