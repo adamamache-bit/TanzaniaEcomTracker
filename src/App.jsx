@@ -2088,14 +2088,22 @@ export default function App() {
         if (supabaseEnabled && cloudAuth.user) {
           const remoteBeforeSave = await loadCloudWorkspace(supabaseWorkspaceId);
           const remoteVersionBeforeSave = Number(remoteBeforeSave.version || 0);
-          const remoteSerializedBeforeSave = JSON.stringify(remoteBeforeSave.state || {});
+          const remoteStateBeforeSave = remoteBeforeSave.state || {};
+          const remoteSerializedBeforeSave = JSON.stringify(remoteStateBeforeSave);
+          const remoteHasDataBeforeSave = hasMeaningfulWorkspaceData(remoteStateBeforeSave);
+          const localHasDataBeforeSave = hasMeaningfulWorkspaceData(snapshot);
+          const remoteLooksFreshBeforeSave =
+            !remoteHasDataBeforeSave &&
+            remoteVersionBeforeSave <= 0 &&
+            !remoteBeforeSave.updatedAt;
           const localVersionBeforeSave = Number(sharedVersionRef.current || 0);
 
           if (
             remoteSerializedBeforeSave !== lastSharedPayloadRef.current &&
-            remoteVersionBeforeSave >= localVersionBeforeSave
+            remoteVersionBeforeSave >= localVersionBeforeSave &&
+            !(remoteLooksFreshBeforeSave && localHasDataBeforeSave)
           ) {
-            applySharedStateSnapshot(remoteBeforeSave.state || {});
+            applySharedStateSnapshot(remoteStateBeforeSave);
             sharedVersionRef.current = remoteVersionBeforeSave;
             lastSharedPayloadRef.current = remoteSerializedBeforeSave;
             setSharedWorkspace((prev) => ({
@@ -2140,7 +2148,7 @@ export default function App() {
           updatedAt: payload.updatedAt || null,
           notice: supabaseEnabled ? "Cloud workspace synced" : "Shared workspace synced",
         });
-      } catch {
+      } catch (error) {
         if (cancelled) return;
         setSharedWorkspace((prev) => ({
           ...prev,
@@ -2148,7 +2156,11 @@ export default function App() {
           available: prev.available,
           loading: false,
           saving: false,
-          notice: prev.available ? (supabaseEnabled ? "Cloud workspace sync delayed" : "Shared workspace sync delayed") : "Local workspace mode",
+          notice: prev.available
+            ? (supabaseEnabled
+                ? `Cloud workspace sync delayed${error instanceof Error && error.message ? `: ${error.message}` : ""}`
+                : "Shared workspace sync delayed")
+            : "Local workspace mode",
         }));
       } finally {
         sharedSyncLockRef.current = false;
