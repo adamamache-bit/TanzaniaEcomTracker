@@ -4665,31 +4665,6 @@ export default function App() {
       );
     }
 
-  if (supabaseEnabled && cloudAuth.user && (!sharedWorkspace.initialized || sharedWorkspace.loading)) {
-    return (
-      <div style={styles.shell}>
-        <div
-          style={{
-            minHeight: "100vh",
-            display: "grid",
-            placeItems: "center",
-            padding: isCompact ? 18 : 32,
-            background:
-              "radial-gradient(circle at top left, rgba(35,88,213,0.12), transparent 32%), radial-gradient(circle at top right, rgba(31,143,95,0.10), transparent 28%), linear-gradient(180deg, #f6f8fc 0%, #eef3fb 100%)",
-          }}
-        >
-          <div style={{ ...styles.card, width: "100%", maxWidth: 620, textAlign: "center", padding: 28 }}>
-            <div style={styles.sectionEyebrow}>Cloud workspace</div>
-            <div style={{ marginTop: 10, fontSize: 28, fontWeight: 900 }}>Syncing live data</div>
-            <div style={{ color: textSoft, marginTop: 10, lineHeight: 1.6 }}>
-              The app is loading the latest shared data from the cloud so every browser sees the same workspace.
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div style={styles.shell}>
       <div style={{ ...styles.layout, gridTemplateColumns: isCompact ? "1fr" : "260px 1fr" }}>
