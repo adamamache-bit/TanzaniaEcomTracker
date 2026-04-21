@@ -1617,6 +1617,7 @@ export default function App() {
   const sharedHydratingRef = useRef(false);
   const sharedVersionRef = useRef(0);
   const lastSharedPayloadRef = useRef("");
+  const latestSharedStateRef = useRef({});
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1280 : window.innerWidth
   );
@@ -1775,6 +1776,18 @@ export default function App() {
     [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking]
   );
 
+  useEffect(() => {
+    latestSharedStateRef.current = {
+      products,
+      tracking,
+      customers,
+      serviceForm,
+      situationData,
+      metaAdsState,
+      importMeta,
+    };
+  }, [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking]);
+
   const applySharedStateSnapshot = useCallback((snapshot = {}) => {
     sharedHydratingRef.current = true;
     try {
@@ -1893,11 +1906,15 @@ export default function App() {
         if (cancelled) return;
         const remoteState = payload.state || {};
         const remoteHasData = hasMeaningfulWorkspaceData(remoteState);
-        const localSnapshot = buildSharedStateSnapshot();
+        const remoteLooksFresh =
+          !remoteHasData &&
+          Number(payload.version || 0) <= 0 &&
+          !payload.updatedAt;
+        const localSnapshot = latestSharedStateRef.current || {};
         const localHasData = hasMeaningfulWorkspaceData(localSnapshot);
         let recoveredFromAutoBackup = false;
 
-        if (!remoteHasData && !localHasData) {
+        if (remoteLooksFresh && !localHasData) {
           try {
             const rawAutoBackup = localStorage.getItem(AUTO_BACKUP_KEY);
             if (rawAutoBackup) {
@@ -1921,7 +1938,7 @@ export default function App() {
           }
         }
 
-        const shouldKeepLocal = !remoteHasData && localHasData;
+        const shouldKeepLocal = remoteLooksFresh && localHasData;
 
         if (!shouldKeepLocal && !recoveredFromAutoBackup) {
           applySharedStateSnapshot(remoteState);
@@ -1961,7 +1978,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [applySharedStateSnapshot, buildSharedStateSnapshot, cloudAuth.ready, cloudAuth.user]);
+  }, [applySharedStateSnapshot, cloudAuth.ready, cloudAuth.user]);
 
   useEffect(() => {
     localStorage.setItem(IMPORT_META_KEY, JSON.stringify(importMeta));
