@@ -885,6 +885,36 @@ function sanitizeServiceForm(value) {
   };
 }
 
+function getDefaultServiceForm() {
+  return sanitizeServiceForm({
+    totalLeads: 150,
+    confirmationRate: 50,
+    deliveryRate: 50,
+    sellingPriceTzs: 39000,
+    productCostTzs: 15000,
+    cplUsd: 950 / 150,
+  });
+}
+
+function getDefaultImportMeta() {
+  return {
+    lastOrdersImportAt: null,
+    lastShippingImportAt: null,
+  };
+}
+
+function getDefaultCloudWorkspaceState() {
+  return {
+    products: [],
+    tracking: [],
+    customers: [],
+    serviceForm: getDefaultServiceForm(),
+    situationData: getDefaultSituationData(),
+    metaAdsState: getDefaultMetaAdsState(),
+    importMeta: getDefaultImportMeta(),
+  };
+}
+
 function sanitizeMetaAdsState(value) {
   const defaults = getDefaultMetaAdsState();
   return {
@@ -1624,15 +1654,9 @@ export default function App() {
   const [activePage, setActivePage] = useState("dashboard");
   const [selectedService, setSelectedService] = useState("standard");
   const [selectedCountry, setSelectedCountry] = useState("tanzania");
-  const [serviceForm, setServiceForm] = useState({
-    totalLeads: 150,
-    confirmationRate: 50,
-    deliveryRate: 50,
-    sellingPriceTzs: 39000,
-    productCostTzs: 15000,
-    cplUsd: 950 / 150,
-  });
+  const [serviceForm, setServiceForm] = useState(getDefaultServiceForm);
   const [situationData, setSituationData] = useState(() => {
+    if (supabaseEnabled) return getDefaultSituationData();
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? sanitizeSituationData(JSON.parse(raw).situationData) : getDefaultSituationData();
@@ -1676,14 +1700,16 @@ export default function App() {
   const [shippingImportNotice, setShippingImportNotice] = useState("");
   const [shippingImportDetails, setShippingImportDetails] = useState(null);
   const [importMeta, setImportMeta] = useState(() => {
+    if (supabaseEnabled) return getDefaultImportMeta();
     try {
       const raw = localStorage.getItem(IMPORT_META_KEY);
-      return raw ? JSON.parse(raw) : { lastOrdersImportAt: null, lastShippingImportAt: null };
+      return raw ? JSON.parse(raw) : getDefaultImportMeta();
     } catch {
-      return { lastOrdersImportAt: null, lastShippingImportAt: null };
+      return getDefaultImportMeta();
     }
   });
   const [metaAdsState, setMetaAdsState] = useState(() => {
+    if (supabaseEnabled) return getDefaultMetaAdsState();
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? sanitizeMetaAdsState(JSON.parse(raw).metaAdsState) : getDefaultMetaAdsState();
@@ -1737,6 +1763,7 @@ export default function App() {
   const [auditSearch, setAuditSearch] = useState("");
 
   const [products, setProducts] = useState(() => {
+    if (supabaseEnabled) return [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? (JSON.parse(raw).products || initialProducts).map(sanitizeProductRecord) : initialProducts.map(sanitizeProductRecord);
@@ -1746,6 +1773,7 @@ export default function App() {
   });
 
   const [tracking, setTracking] = useState(() => {
+    if (supabaseEnabled) return [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? JSON.parse(raw).tracking || initialTracking : initialTracking;
@@ -1755,6 +1783,7 @@ export default function App() {
   });
 
   const [customers, setCustomers] = useState(() => {
+    if (supabaseEnabled) return [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? (JSON.parse(raw).customers || INITIAL_CUSTOMERS).map(sanitizeCustomerRecord) : INITIAL_CUSTOMERS;
@@ -1789,20 +1818,40 @@ export default function App() {
   }, [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking]);
 
   const applySharedStateSnapshot = useCallback((snapshot = {}) => {
+    const cloudDefaults = getDefaultCloudWorkspaceState();
+    const fallbackSnapshot = supabaseEnabled
+      ? cloudDefaults
+      : {
+          products: initialProducts.map(sanitizeProductRecord),
+          tracking: [...initialTracking],
+          customers: INITIAL_CUSTOMERS.map(sanitizeCustomerRecord),
+          serviceForm: getDefaultServiceForm(),
+          situationData: getDefaultSituationData(),
+          metaAdsState: getDefaultMetaAdsState(),
+          importMeta: getDefaultImportMeta(),
+        };
+    const normalizedSnapshot = {
+      products: Array.isArray(snapshot.products) ? snapshot.products.map(sanitizeProductRecord) : fallbackSnapshot.products,
+      tracking: Array.isArray(snapshot.tracking) ? snapshot.tracking : fallbackSnapshot.tracking,
+      customers: Array.isArray(snapshot.customers) ? snapshot.customers.map(sanitizeCustomerRecord) : fallbackSnapshot.customers,
+      serviceForm: sanitizeServiceForm(snapshot.serviceForm || fallbackSnapshot.serviceForm),
+      situationData: sanitizeSituationData(snapshot.situationData || fallbackSnapshot.situationData),
+      metaAdsState: sanitizeMetaAdsState(snapshot.metaAdsState || fallbackSnapshot.metaAdsState),
+      importMeta: {
+        lastOrdersImportAt: snapshot.importMeta?.lastOrdersImportAt || null,
+        lastShippingImportAt: snapshot.importMeta?.lastShippingImportAt || null,
+      },
+    };
+
     sharedHydratingRef.current = true;
     try {
-      if (Array.isArray(snapshot.products)) setProducts(snapshot.products.map(sanitizeProductRecord));
-      if (Array.isArray(snapshot.tracking)) setTracking(snapshot.tracking);
-      if (Array.isArray(snapshot.customers)) setCustomers(snapshot.customers.map(sanitizeCustomerRecord));
-      if (snapshot.serviceForm) setServiceForm(sanitizeServiceForm(snapshot.serviceForm));
-      if (snapshot.situationData) setSituationData(sanitizeSituationData(snapshot.situationData));
-      if (snapshot.metaAdsState) setMetaAdsState(sanitizeMetaAdsState(snapshot.metaAdsState));
-      if (snapshot.importMeta) {
-        setImportMeta({
-          lastOrdersImportAt: snapshot.importMeta.lastOrdersImportAt || null,
-          lastShippingImportAt: snapshot.importMeta.lastShippingImportAt || null,
-        });
-      }
+      setProducts(normalizedSnapshot.products);
+      setTracking(normalizedSnapshot.tracking);
+      setCustomers(normalizedSnapshot.customers);
+      setServiceForm(normalizedSnapshot.serviceForm);
+      setSituationData(normalizedSnapshot.situationData);
+      setMetaAdsState(normalizedSnapshot.metaAdsState);
+      setImportMeta(normalizedSnapshot.importMeta);
     } finally {
       window.setTimeout(() => {
         sharedHydratingRef.current = false;
@@ -1811,6 +1860,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (supabaseEnabled) return;
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
@@ -1905,6 +1955,25 @@ export default function App() {
         }
         if (cancelled) return;
         const remoteState = payload.state || {};
+        const cloudMode = supabaseEnabled && cloudAuth.user;
+
+        if (cloudMode) {
+          applySharedStateSnapshot(remoteState);
+          sharedVersionRef.current = Number(payload.version || 0);
+          lastSharedPayloadRef.current = JSON.stringify(remoteState);
+          setSharedWorkspace({
+            mode: "cloud",
+            available: true,
+            loading: false,
+            saving: false,
+            initialized: true,
+            version: Number(payload.version || 0),
+            updatedAt: payload.updatedAt || null,
+            notice: "Cloud workspace connected",
+          });
+          return;
+        }
+
         const remoteHasData = hasMeaningfulWorkspaceData(remoteState);
         const remoteLooksFresh =
           !remoteHasData &&
@@ -1914,7 +1983,7 @@ export default function App() {
         const localHasData = hasMeaningfulWorkspaceData(localSnapshot);
         let recoveredFromAutoBackup = false;
 
-        if (remoteLooksFresh && !localHasData) {
+        if (!cloudMode && remoteLooksFresh && !localHasData) {
           try {
             const rawAutoBackup = localStorage.getItem(AUTO_BACKUP_KEY);
             if (rawAutoBackup) {
@@ -5464,6 +5533,31 @@ export default function App() {
     [productDetailsRows, productDetailsFilters.rowLimit]
   );
 
+  if (supabaseEnabled && !cloudAuth.ready) {
+    return (
+      <div style={styles.shell}>
+        <div
+          style={{
+            minHeight: "100vh",
+            display: "grid",
+            placeItems: "center",
+            padding: isCompact ? 18 : 32,
+            background:
+              "radial-gradient(circle at top left, rgba(35,88,213,0.12), transparent 32%), radial-gradient(circle at top right, rgba(31,143,95,0.10), transparent 28%), linear-gradient(180deg, #f6f8fc 0%, #eef3fb 100%)",
+          }}
+        >
+          <div style={{ ...styles.card, width: "100%", maxWidth: 560, textAlign: "center", padding: 28 }}>
+            <div style={styles.sectionEyebrow}>Cloud access</div>
+            <div style={{ marginTop: 10, fontSize: 28, fontWeight: 900 }}>Opening your workspace</div>
+            <div style={{ color: textSoft, marginTop: 10, lineHeight: 1.6 }}>
+              Checking your session and preparing the live data feed.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (supabaseEnabled && !cloudAuth.user) {
     return (
       <div style={styles.shell}>
@@ -5542,6 +5636,31 @@ export default function App() {
                   {cloudAuth.loading ? "Connecting..." : cloudAuth.mode === "signup" ? "Create cloud access" : "Open cloud workspace"}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      );
+    }
+
+  if (supabaseEnabled && cloudAuth.user && (!sharedWorkspace.initialized || sharedWorkspace.loading)) {
+    return (
+      <div style={styles.shell}>
+        <div
+          style={{
+            minHeight: "100vh",
+            display: "grid",
+            placeItems: "center",
+            padding: isCompact ? 18 : 32,
+            background:
+              "radial-gradient(circle at top left, rgba(35,88,213,0.12), transparent 32%), radial-gradient(circle at top right, rgba(31,143,95,0.10), transparent 28%), linear-gradient(180deg, #f6f8fc 0%, #eef3fb 100%)",
+          }}
+        >
+          <div style={{ ...styles.card, width: "100%", maxWidth: 620, textAlign: "center", padding: 28 }}>
+            <div style={styles.sectionEyebrow}>Cloud workspace</div>
+            <div style={{ marginTop: 10, fontSize: 28, fontWeight: 900 }}>Syncing live data</div>
+            <div style={{ color: textSoft, marginTop: 10, lineHeight: 1.6 }}>
+              The app is loading the latest shared data from the cloud so every browser sees the same workspace.
             </div>
           </div>
         </div>
