@@ -71,11 +71,7 @@ export const initialProducts = [
   },
 ];
 
-export const initialTracking = [
-  { id: "T001", productId: "P001", adSpend: 100000, orders: 20, confirmed: 15, delivered: 10 },
-  { id: "T002", productId: "P002", adSpend: 160000, orders: 14, confirmed: 9, delivered: 6 },
-  { id: "T003", productId: "P003", adSpend: 80000, orders: 18, confirmed: 12, delivered: 8 },
-];
+export const initialTracking = [];
 
 export const serviceCountryData = {
   standard: {
@@ -644,6 +640,8 @@ export const SHIPPING_STATUS_RULES = {
   "in-preparation": { bucket: "to_prepare" },
   prepared: { bucket: "to_prepare" },
   "in-delivery": { bucket: "shipped" },
+  "out-delivered": { bucket: "shipped" },
+  "out-for-delivery": { bucket: "shipped" },
   shipped: { bucket: "shipped" },
   shipping: { bucket: "shipped" },
   "sending-to-agent": { bucket: "shipped" },
