@@ -2119,12 +2119,48 @@ export default function App() {
   }, [buildSharedStateSnapshot, cloudAuth.user, sharedWorkspace.initialized]);
 
   useEffect(() => {
-    if (supabaseEnabled) return undefined;
-
     let cancelled = false;
 
     const pollSharedWorkspace = async () => {
       try {
+        if (supabaseEnabled) {
+          if (!cloudAuth.user) return;
+
+          const payload = await loadCloudWorkspace(supabaseWorkspaceId);
+          const remoteVersion = Number(payload.version || 0);
+
+          if (!cancelled) {
+            setSharedWorkspace((prev) => ({
+              ...prev,
+              mode: "cloud",
+              available: true,
+              version: remoteVersion,
+              updatedAt: payload.updatedAt || prev.updatedAt,
+              notice:
+                prev.notice === "Cloud workspace unavailable" || prev.notice === "Cloud workspace sync delayed"
+                  ? "Cloud workspace connected"
+                  : prev.notice,
+            }));
+          }
+
+          if (remoteVersion > Number(sharedVersionRef.current || 0) && !sharedSyncLockRef.current) {
+            if (cancelled) return;
+            applySharedStateSnapshot(payload.state || {});
+            sharedVersionRef.current = remoteVersion;
+            lastSharedPayloadRef.current = JSON.stringify(payload.state || {});
+            setSharedWorkspace((prev) => ({
+              ...prev,
+              mode: "cloud",
+              available: true,
+              version: remoteVersion,
+              updatedAt: payload.updatedAt || prev.updatedAt,
+              notice: "Cloud workspace updated",
+            }));
+          }
+
+          return;
+        }
+
         const metaResponse = await fetch(`${getSharedApiBase()}/meta`, { headers: { Accept: "application/json" } });
         const metaPayload = await metaResponse.json().catch(() => ({}));
         if (!metaResponse.ok || !metaPayload?.ok) throw new Error(metaPayload?.error || "Unable to check shared workspace.");
@@ -2162,20 +2198,20 @@ export default function App() {
         if (cancelled) return;
         setSharedWorkspace((prev) => ({
           ...prev,
-          mode: prev.available ? prev.mode : "local",
-          available: false,
-          notice: "Local workspace mode",
+          mode: prev.available ? prev.mode : supabaseEnabled ? "cloud" : "local",
+          available: prev.available,
+          notice: supabaseEnabled ? "Cloud workspace sync delayed" : "Local workspace mode",
         }));
       }
     };
 
     pollSharedWorkspace();
-    const interval = window.setInterval(pollSharedWorkspace, 15000);
+    const interval = window.setInterval(pollSharedWorkspace, supabaseEnabled ? 5000 : 15000);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [applySharedStateSnapshot]);
+  }, [applySharedStateSnapshot, cloudAuth.user]);
 
   useEffect(() => {
     if (!supabaseEnabled || !cloudAuth.user) return undefined;
