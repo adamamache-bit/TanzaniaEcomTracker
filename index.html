@@ -11,6 +11,67 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (() => {
+        const blockedTexts = [
+          "Syncing live data",
+          "The app is loading the latest shared data from the cloud so every browser sees the same workspace.",
+          "Opening your workspace",
+          "Checking your session and preparing the live data feed.",
+        ];
+
+        const hideLegacySplash = () => {
+          if (!document.body) return;
+          const elements = Array.from(document.body.querySelectorAll("*"));
+          for (const element of elements) {
+            const text = (element.textContent || "").trim();
+            if (!text) continue;
+            if (!blockedTexts.some((entry) => text.includes(entry))) continue;
+
+            let target = element;
+            while (target && target !== document.body) {
+              const rect = target.getBoundingClientRect();
+              const computed = window.getComputedStyle(target);
+              const looksLikeOverlay =
+                computed.position === "fixed" ||
+                computed.position === "absolute" ||
+                rect.height >= window.innerHeight * 0.45 ||
+                rect.width >= window.innerWidth * 0.45;
+
+              if (looksLikeOverlay) {
+                target.style.display = "none";
+                break;
+              }
+
+              target = target.parentElement;
+            }
+          }
+        };
+
+        window.addEventListener("load", hideLegacySplash, true);
+        window.addEventListener("pageshow", hideLegacySplash, true);
+        window.addEventListener("focus", hideLegacySplash, true);
+        document.addEventListener("visibilitychange", hideLegacySplash, true);
+
+        const observer = new MutationObserver(() => hideLegacySplash());
+        window.addEventListener(
+          "DOMContentLoaded",
+          () => {
+            hideLegacySplash();
+            if (document.body) {
+              observer.observe(document.body, {
+                childList: true,
+                subtree: true,
+                characterData: true,
+              });
+            }
+          },
+          { once: true }
+        );
+
+        window.setInterval(hideLegacySplash, 1200);
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
