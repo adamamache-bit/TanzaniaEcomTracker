@@ -2371,6 +2371,67 @@ export default function App() {
     };
   }, [applySharedStateSnapshot, cloudAuth.user]);
 
+  const persistProductsSnapshot = useCallback(
+    async (nextProducts, notice = "Cloud product catalog synced") => {
+      if (!supabaseEnabled || !cloudAuth.user || !sharedWorkspace.initialized) return true;
+
+      const nextSnapshot = {
+        ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+        products: nextProducts.map(sanitizeProductRecord),
+      };
+      const serialized = JSON.stringify(nextSnapshot);
+
+      if (sharedSyncLockRef.current) return false;
+
+      sharedSyncLockRef.current = true;
+      latestSharedStateRef.current = nextSnapshot;
+      lastSharedPayloadRef.current = serialized;
+      setSharedWorkspace((prev) => ({
+        ...prev,
+        mode: "cloud",
+        available: true,
+        loading: false,
+        saving: true,
+        notice: "Saving product changes to cloud...",
+      }));
+
+      try {
+        const saved = await saveCloudWorkspace(nextSnapshot, {
+          workspaceId: supabaseWorkspaceId,
+          userId: cloudAuth.user.id,
+        });
+
+        sharedVersionRef.current = Number(saved.version || 0);
+        setSharedWorkspace((prev) => ({
+          ...prev,
+          mode: "cloud",
+          available: true,
+          loading: false,
+          saving: false,
+          initialized: true,
+          version: Number(saved.version || 0),
+          updatedAt: saved.updatedAt || prev.updatedAt,
+          notice,
+        }));
+        return true;
+      } catch (error) {
+        lastSharedPayloadRef.current = "";
+        setSharedWorkspace((prev) => ({
+          ...prev,
+          mode: "cloud",
+          available: true,
+          loading: false,
+          saving: false,
+          notice: `Cloud product sync failed${error instanceof Error && error.message ? `: ${error.message}` : ""}`,
+        }));
+        return false;
+      } finally {
+        sharedSyncLockRef.current = false;
+      }
+    },
+    [cloudAuth.user, sharedWorkspace.initialized]
+  );
+
   const getProduct = useCallback((id) => products.find((p) => p.id === id), [products]);
   const responsiveColumns = useCallback(
     (desktop, tablet = "1fr 1fr", mobile = "1fr") => {
@@ -3208,7 +3269,7 @@ export default function App() {
   const createProductId = () => buildNextId(products, "P");
   const createCustomerId = () => buildNextId(customers, "C");
 
-  const saveExpeditionProduct = () => {
+  const saveExpeditionProduct = async () => {
     if (!expeditionForm.name.trim()) return;
 
     const source = expeditionForm.source || "china";
@@ -3230,9 +3291,10 @@ export default function App() {
       offers: normalizeProductOffers(expeditionForm.offers),
     };
 
+    let nextProducts;
+
     if (editingProductId) {
-      setProducts((prev) =>
-        prev.map((product) =>
+      nextProducts = products.map((product) =>
           product.id === editingProductId
             ? {
                 ...product,
@@ -3241,13 +3303,12 @@ export default function App() {
                 stockOrderedAt: product.stockOrderedAt || getTodayString(),
                 nextArrivalCheckDate:
                   source === "dubai"
-                    ? product.nextArrivalCheckDate || addDaysToDateString(getTodayString(), Number(expeditionForm.estimatedArrivalDays || 0))
-                    : null,
-                stockArrivedAt: source === "dubai" ? product.stockArrivedAt || null : product.stockArrivedAt || getTodayString(),
-              }
-            : product
-        )
-      );
+                      ? product.nextArrivalCheckDate || addDaysToDateString(getTodayString(), Number(expeditionForm.estimatedArrivalDays || 0))
+                      : null,
+                  stockArrivedAt: source === "dubai" ? product.stockArrivedAt || null : product.stockArrivedAt || getTodayString(),
+                }
+              : product
+        );
     } else {
       const newProduct = {
         id: createProductId(),
@@ -3261,8 +3322,15 @@ export default function App() {
         stockArrivedAt: source === "dubai" ? null : getTodayString(),
       };
 
-      setProducts((prev) => [...prev, newProduct]);
+      nextProducts = [...products, newProduct];
     }
+
+    setProducts(nextProducts);
+    latestSharedStateRef.current = {
+      ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+      products: nextProducts.map(sanitizeProductRecord),
+    };
+    await persistProductsSnapshot(nextProducts, editingProductId ? "Cloud product updated" : "Cloud product added");
 
     setEditingProductId(null);
     setExpeditionForm(getEmptyExpeditionForm());
@@ -3324,7 +3392,13 @@ export default function App() {
   };
 
   const deleteProduct = (productId) => {
-    setProducts((prev) => prev.filter((p) => p.id !== productId));
+    const nextProducts = products.filter((p) => p.id !== productId);
+    setProducts(nextProducts);
+    latestSharedStateRef.current = {
+      ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+      products: nextProducts.map(sanitizeProductRecord),
+    };
+    void persistProductsSnapshot(nextProducts, "Cloud product deleted");
     setTracking((prev) => prev.filter((t) => t.productId !== productId));
     setCustomers((prev) => prev.filter((c) => c.productId !== productId));
     if (editingProductId === productId) {
