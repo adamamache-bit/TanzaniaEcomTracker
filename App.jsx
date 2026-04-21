@@ -45,237 +45,83 @@ import {
   signUpCloud,
   subscribeToCloudWorkspace,
 } from "./lib/cloudWorkspace";
+import {
+  addDaysToDateString,
+  addMonths,
+  appendCustomerHistory,
+  buildCalendarMatrix,
+  buildHistoryEntry,
+  buildMappedMetaRows,
+  buildNextId,
+  DEFAULT_CONFIRMATION_STATUSES,
+  DEFAULT_POST_CONFIRMATION_STATUSES,
+  ensureShippingStatusForConfirmed,
+  excelDateToInput,
+  formatDateInput,
+  formatInteger,
+  formatLongDate,
+  formatMetaLeadSourceLabel,
+  formatOffersSummary,
+  formatStatusLabel,
+  formatTZS,
+  formatUSD,
+  formatUsdFromTzs,
+  getConfirmationBucket,
+  getCustomerConfirmationStatus,
+  getCustomerEffectiveStatus,
+  getCustomerOrderTotalTzs,
+  getCustomerShippingStatus,
+  getDayBucket,
+  getDefaultCloudWorkspaceState,
+  getDefaultImportMeta,
+  getDefaultMetaAdsState,
+  getDefaultServiceForm,
+  getDefaultSituationData,
+  getEmptyCustomerForm,
+  getEmptyExpeditionForm,
+  getMetaApiBase,
+  getProductPricing,
+  getSharedApiBase,
+  getStatusBadgeStyle,
+  getShippingBucket,
+  getStatusColor,
+  getTodayString,
+  getUnitProductCostUSD,
+  getWeekLabel,
+  getWeekStartString,
+  hasMeaningfulWorkspaceData,
+  INITIAL_CUSTOMERS,
+  initialProducts,
+  initialTracking,
+  isConfirmationCancelled,
+  isConfirmationConfirmed,
+  isConfirmationNew,
+  isShippingDelivered,
+  isShippingInProgress,
+  isShippingReturned,
+  matchProductIdFromText,
+  META_RANGE_PRESETS,
+  normalizeHeaderName,
+  normalizeOrderStatus,
+  normalizePhoneValue,
+  normalizeProductOffers,
+  parseDateInput,
+  parseLooseNumber,
+  sanitizeCustomerRecord,
+  sanitizeMetaAdsState,
+  sanitizeProductRecord,
+  sanitizeServiceForm,
+  sanitizeSituationData,
+  serviceCountryData,
+  startOfMonth,
+  USD_TO_TZS,
+} from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
 
 const STORAGE_KEY = "tanzania-ecom-tracker-v16";
 const AUTO_BACKUP_KEY = "tanzania-ecom-tracker-auto-backup-v1";
 const AUTO_BACKUP_META_KEY = "tanzania-ecom-tracker-auto-backup-meta-v1";
 const IMPORT_META_KEY = "tanzania-ecom-tracker-import-meta-v1";
-const INITIAL_CUSTOMERS = [
-  {
-    id: "C001",
-    customerName: "Amina Yusuf",
-    phone: "+255712345678",
-    city: "Dar es Salaam",
-    address: "Mikocheni, Block A",
-    productId: "P001",
-    quantity: 1,
-    orderDate: "2026-04-12",
-    paymentMethod: "COD",
-    status: "new",
-    notes: "Call in the afternoon",
-  },
-];
-
-const USD_TO_TZS = 2750;
-const META_API_PORT = 4174;
-const SHARED_API_PORT = 4174;
-
-const initialProducts = [
-  {
-    id: "P001",
-    name: "Electric Callus Remover",
-    source: "china",
-    sellingPrice: 39000,
-    purchaseUnitPrice: 12000,
-    totalQty: 100,
-    shippingTotal: 180000,
-    otherCharges: 70000,
-    delivery: 7000,
-    estimatedArrivalDays: 15,
-    stockArrivalStatus: "arrived",
-    stockOrderedAt: "2026-04-01",
-    nextArrivalCheckDate: null,
-    stockArrivedAt: "2026-04-16",
-  },
-  {
-    id: "P002",
-    name: "Hair Dryer 5 in 1",
-    source: "dubai",
-    sellingPrice: 85000,
-    purchaseUnitPrice: 35000,
-    totalQty: 60,
-    shippingTotal: 220000,
-    otherCharges: 90000,
-    delivery: 9000,
-    estimatedArrivalDays: 3,
-    stockArrivalStatus: "pending",
-    stockOrderedAt: "2026-04-11",
-    nextArrivalCheckDate: "2026-04-14",
-    stockArrivedAt: null,
-  },
-  {
-    id: "P003",
-    name: "Whitening Toothpaste",
-    source: "china",
-    sellingPrice: 25000,
-    purchaseUnitPrice: 6000,
-    totalQty: 200,
-    shippingTotal: 120000,
-    otherCharges: 40000,
-    delivery: 6500,
-    estimatedArrivalDays: 15,
-    stockArrivalStatus: "arrived",
-    stockOrderedAt: "2026-03-15",
-    nextArrivalCheckDate: null,
-    stockArrivedAt: "2026-03-30",
-  },
-];
-
-const initialTracking = [
-  { id: "T001", productId: "P001", adSpend: 100000, orders: 20, confirmed: 15, delivered: 10 },
-  { id: "T002", productId: "P002", adSpend: 160000, orders: 14, confirmed: 9, delivered: 6 },
-  { id: "T003", productId: "P003", adSpend: 80000, orders: 18, confirmed: 12, delivered: 8 },
-];
-
-const serviceCountryData = {
-  standard: {
-    tanzania: {
-      label: "Standard Tanzania",
-      usdToTzs: 2750,
-      serviceFeePercent: 0,
-      deliveryFeeUsdPerDelivered: 8.5,
-    },
-  },
-  codzoss: {},
-};
-
-const formatDateInput = (date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
-
-const parseDateInput = (dateString) => {
-  if (!dateString) return null;
-  const [year, month, day] = String(dateString).split("-").map(Number);
-  if (!year || !month || !day) return null;
-  return new Date(year, month - 1, day);
-};
-
-const getTodayString = () => formatDateInput(new Date());
-const addDaysToDateString = (dateString, days) => {
-  const date = parseDateInput(dateString);
-  if (!date) return "N/A";
-  if (Number.isNaN(date.getTime())) return "—";
-  date.setDate(date.getDate() + Number(days || 0));
-  return formatDateInput(date);
-};
-
-const formatLongDate = (dateString) => {
-  const date = parseDateInput(dateString);
-  if (!date || Number.isNaN(date.getTime())) return "N/A";
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(date);
-};
-
-const addMonths = (date, months) => {
-  const next = new Date(date);
-  next.setMonth(next.getMonth() + months);
-  return next;
-};
-
-const startOfMonth = (date) => new Date(date.getFullYear(), date.getMonth(), 1);
-const endOfMonth = (date) => new Date(date.getFullYear(), date.getMonth() + 1, 0);
-
-const startOfWeek = (date) => {
-  const next = new Date(date);
-  const diff = next.getDate() - next.getDay();
-  return new Date(next.getFullYear(), next.getMonth(), diff);
-};
-
-const buildCalendarMatrix = (baseDate) => {
-  const monthStart = startOfMonth(baseDate);
-  const monthEnd = endOfMonth(baseDate);
-  const startCursor = new Date(monthStart);
-  startCursor.setDate(monthStart.getDate() - monthStart.getDay());
-  const endCursor = new Date(monthEnd);
-  endCursor.setDate(monthEnd.getDate() + (6 - monthEnd.getDay()));
-
-  const days = [];
-  const cursor = new Date(startCursor);
-  while (cursor <= endCursor) {
-    days.push(new Date(cursor));
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return days;
-};
-
-const META_RANGE_PRESETS = [
-  {
-    label: "Today",
-    getRange: () => {
-      const today = getTodayString();
-      return { start: today, end: today };
-    },
-  },
-  {
-    label: "Yesterday",
-    getRange: () => {
-      const today = getTodayString();
-      const yesterday = addDaysToDateString(today, -1);
-      return { start: yesterday, end: yesterday };
-    },
-  },
-  {
-    label: "Last 7 days",
-    getRange: () => {
-      const today = getTodayString();
-      return { start: addDaysToDateString(today, -6), end: today };
-    },
-  },
-  {
-    label: "Last 14 days",
-    getRange: () => {
-      const today = getTodayString();
-      return { start: addDaysToDateString(today, -13), end: today };
-    },
-  },
-  {
-    label: "Last 30 days",
-    getRange: () => {
-      const today = getTodayString();
-      return { start: addDaysToDateString(today, -29), end: today };
-    },
-  },
-  {
-    label: "This week",
-    getRange: () => {
-      const now = new Date();
-      return { start: formatDateInput(startOfWeek(now)), end: formatDateInput(now) };
-    },
-  },
-  {
-    label: "Last week",
-    getRange: () => {
-      const now = new Date();
-      const thisWeekStart = startOfWeek(now);
-      const lastWeekEnd = new Date(thisWeekStart);
-      lastWeekEnd.setDate(thisWeekStart.getDate() - 1);
-      const lastWeekStart = startOfWeek(lastWeekEnd);
-      return { start: formatDateInput(lastWeekStart), end: formatDateInput(lastWeekEnd) };
-    },
-  },
-  {
-    label: "This month",
-    getRange: () => {
-      const now = new Date();
-      return { start: formatDateInput(startOfMonth(now)), end: formatDateInput(now) };
-    },
-  },
-  {
-    label: "Last month",
-    getRange: () => {
-      const now = new Date();
-      const lastMonth = addMonths(now, -1);
-      return { start: formatDateInput(startOfMonth(lastMonth)), end: formatDateInput(endOfMonth(lastMonth)) };
-    },
-  },
-];
 
 const pageBg = "#f5f7fb";
 const cardBg = "rgba(255, 255, 255, 0.94)";
@@ -287,7 +133,6 @@ const accent = "#2358d5";
 const green = "#158f63";
 const red = "#d9485f";
 const amber = "#c78322";
-const statusPalette = ["#1d5fd0", "#1f8f5f", "#c78322", "#d9485f", "#7c3aed", "#0f766e", "#ea580c", "#475569"];
 
 const styles = {
   shell: {
@@ -427,854 +272,6 @@ const styles = {
   fieldLabel: { fontSize: 11, fontWeight: 800, color: textSoft, letterSpacing: 0.42, textTransform: "uppercase" },
   sectionEyebrow: { fontSize: 11, color: accent, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase" },
 };
-
-function formatTZS(value) {
-  return new Intl.NumberFormat("en-TZ", { style: "currency", currency: "TZS", maximumFractionDigits: 0 }).format(Number(value || 0));
-}
-
-function formatUSD(value) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(Number(value || 0));
-}
-
-function formatUsdFromTzs(value) {
-  return formatUSD(Number(value || 0) / USD_TO_TZS);
-}
-
-function formatMetaLeadSourceLabel(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized || normalized === "no_signal") return "No tracking signal";
-  if (normalized === "lead_action") return "Lead action";
-  if (normalized === "landing_page_view") return "Landing page view";
-  if (normalized === "link_click") return "Link click";
-  if (normalized === "mixed") return "Mixed sources";
-  return formatStatusLabel(normalized);
-}
-
-function formatInteger(value) {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Number(value || 0));
-}
-
-function parseLooseNumber(value) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  const raw = String(value || "").trim();
-  if (!raw) return 0;
-  const cleaned = raw.replace(/[^\d,.-]/g, "").replace(/,/g, "");
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function normalizeHeaderName(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function getMetaApiBase() {
-  const configuredBase = typeof import.meta !== "undefined" ? import.meta.env?.VITE_META_API_BASE : "";
-  if (configuredBase) return `${String(configuredBase).replace(/\/$/, "")}/api/meta`;
-  if (typeof window === "undefined") return `http://127.0.0.1:${META_API_PORT}/api/meta`;
-  return `${window.location.protocol}//${window.location.hostname}:${META_API_PORT}/api/meta`;
-}
-
-function getSharedApiBase() {
-  const configuredBase = typeof import.meta !== "undefined" ? import.meta.env?.VITE_SHARED_API_BASE : "";
-  if (configuredBase) return `${String(configuredBase).replace(/\/$/, "")}/api/state`;
-  if (typeof window === "undefined") return `http://127.0.0.1:${SHARED_API_PORT}/api/state`;
-  return `${window.location.protocol}//${window.location.hostname}:${SHARED_API_PORT}/api/state`;
-}
-
-function matchProductIdFromText(value, products) {
-  const rawValue = String(value || "").trim();
-  if (!rawValue) return "";
-
-  const normalizedValue = normalizeHeaderName(rawValue);
-  if (!normalizedValue) return "";
-
-  const valueTokens = normalizedValue.split(" ").filter(Boolean);
-
-  const byId = products.find((product) => product.id.toLowerCase() === rawValue.toLowerCase());
-  if (byId) return byId.id;
-
-  const byName = products.find((product) => normalizeHeaderName(product.name) === normalizedValue);
-  if (byName) return byName.id;
-
-  const partial = products.find((product) => {
-    const normalizedProductName = normalizeHeaderName(product.name);
-    return normalizedProductName.includes(normalizedValue) || normalizedValue.includes(normalizedProductName);
-  });
-  if (partial) return partial.id;
-
-  const scored = products
-    .map((product) => {
-      const productTokens = normalizeHeaderName(product.name).split(" ").filter(Boolean);
-      const overlap = valueTokens.filter((token) => productTokens.includes(token)).length;
-      const score = productTokens.length > 0 ? overlap / productTokens.length : 0;
-      return { id: product.id, score };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  return scored[0]?.score >= 0.5 ? scored[0].id : "";
-}
-
-function buildMappedMetaRows(rows, products, campaignMappings = {}) {
-  return (rows || []).map((row) => {
-    const suggestedProductId = matchProductIdFromText(`${row.campaignName} ${row.adsetName || ""}`, products);
-    const mappedProductId = campaignMappings[row.id] || suggestedProductId || "";
-    const product = products.find((entry) => entry.id === mappedProductId) || null;
-
-    return {
-      ...row,
-      suggestedProductId,
-      mappedProductId,
-      mappedProductName: product?.name || "",
-    };
-  });
-}
-
-function normalizeOrderStatus(value) {
-  const normalized = normalizeHeaderName(value);
-  if (!normalized) return "new-order";
-  return normalized.replace(/\s+/g, "-");
-}
-
-function normalizeProductOffers(offers) {
-  if (!Array.isArray(offers)) return [];
-
-  const offerMap = new Map();
-  offers.forEach((offer) => {
-    const minQty = Math.max(2, Math.round(Number(offer?.minQty || offer?.quantity || 0)));
-    const totalPrice = Math.max(0, parseLooseNumber(offer?.totalPrice ?? offer?.price ?? 0));
-    if (!minQty || !totalPrice) return;
-    offerMap.set(minQty, { minQty, totalPrice });
-  });
-
-  return Array.from(offerMap.values()).sort((a, b) => a.minQty - b.minQty);
-}
-
-function getProductPricing(product, quantity) {
-  const safeQty = Math.max(1, Number(quantity || 1));
-  const baseTotal = Number(product?.sellingPrice || 0) * safeQty;
-  const offers = normalizeProductOffers(product?.offers);
-  const matchedOffer = offers
-    .filter((offer) => safeQty >= offer.minQty)
-    .sort((a, b) => b.minQty - a.minQty)[0] || null;
-  const totalPrice = matchedOffer ? Number(matchedOffer.totalPrice || 0) : baseTotal;
-
-  return {
-    quantity: safeQty,
-    totalPrice,
-    unitPrice: safeQty > 0 ? totalPrice / safeQty : 0,
-    matchedOffer,
-    offers,
-  };
-}
-
-function getCustomerOrderTotalTzs(customer, product) {
-  const explicitTotal = Math.max(0, parseLooseNumber(customer?.orderTotalTzs));
-  if (explicitTotal > 0) return explicitTotal;
-  return getProductPricing(product, customer?.quantity).totalPrice;
-}
-
-function formatOffersSummary(offers) {
-  const normalized = normalizeProductOffers(offers);
-  if (!normalized.length) return "No offers";
-  return normalized.map((offer) => `${offer.minQty} pcs = ${formatTZS(offer.totalPrice)}`).join(" | ");
-}
-
-function sanitizeProductRecord(product) {
-  return {
-    ...product,
-    supplierName: String(product?.supplierName || ""),
-    supplierContact: String(product?.supplierContact || ""),
-    lifecycleStatus: String(product?.lifecycleStatus || "test"),
-    defectRate: Math.max(0, parseLooseNumber(product?.defectRate)),
-    notes: String(product?.notes || ""),
-    offers: normalizeProductOffers(product?.offers),
-  };
-}
-
-function sanitizeSituationData(value) {
-  const defaults = getDefaultSituationData();
-  return {
-    salaries: Array.isArray(value?.salaries)
-      ? value.salaries.map((entry, index) => ({
-          id: entry?.id || `salary-${index + 1}`,
-          name: String(entry?.name || ""),
-          role: String(entry?.role || ""),
-          amountTzs: Math.max(0, parseLooseNumber(entry?.amountTzs)),
-        }))
-      : defaults.salaries,
-    fixedCharges: Array.isArray(value?.fixedCharges)
-      ? value.fixedCharges.map((entry, index) => ({
-          id: entry?.id || `fixed-${index + 1}`,
-          label: String(entry?.label || ""),
-          amountTzs: Math.max(0, parseLooseNumber(entry?.amountTzs)),
-        }))
-      : defaults.fixedCharges,
-    adInputs:
-      value?.adInputs && typeof value.adInputs === "object"
-        ? Object.fromEntries(
-            Object.entries(value.adInputs).map(([productId, entry]) => [
-              String(productId),
-              {
-                averageLeadCostTzs: Math.max(0, parseLooseNumber(entry?.averageLeadCostTzs)),
-                incomingLeads: Math.max(0, Math.round(parseLooseNumber(entry?.incomingLeads))),
-              },
-            ])
-          )
-        : defaults.adInputs,
-    hourlyAdsSnapshots: Array.isArray(value?.hourlyAdsSnapshots)
-      ? value.hourlyAdsSnapshots
-          .map((entry, index) => ({
-            id: entry?.id || `hourly-ads-${index + 1}`,
-            bucket: String(entry?.bucket || ""),
-            totalSpendTzs: Math.max(0, parseLooseNumber(entry?.totalSpendTzs)),
-            capturedAt: entry?.capturedAt || null,
-            source: String(entry?.source || "tracking"),
-          }))
-          .sort((a, b) => String(b.bucket || "").localeCompare(String(a.bucket || "")))
-      : defaults.hourlyAdsSnapshots,
-    cumulativeAdsTotalTzs: Math.max(0, parseLooseNumber(value?.cumulativeAdsTotalTzs)),
-    cumulativeAdsByProduct:
-      value?.cumulativeAdsByProduct && typeof value.cumulativeAdsByProduct === "object"
-        ? Object.fromEntries(
-            Object.entries(value.cumulativeAdsByProduct).map(([productId, amount]) => [
-              String(productId),
-              Math.max(0, parseLooseNumber(amount)),
-            ])
-          )
-        : defaults.cumulativeAdsByProduct,
-    lastObservedAdsSpendTzs: Math.max(0, parseLooseNumber(value?.lastObservedAdsSpendTzs)),
-    lastObservedAdsByProduct:
-      value?.lastObservedAdsByProduct && typeof value.lastObservedAdsByProduct === "object"
-        ? Object.fromEntries(
-            Object.entries(value.lastObservedAdsByProduct).map(([productId, amount]) => [
-              String(productId),
-              Math.max(0, parseLooseNumber(amount)),
-            ])
-          )
-        : defaults.lastObservedAdsByProduct,
-    lastAdsAccumulatedAt: value?.lastAdsAccumulatedAt || null,
-    weeklyAdReviews: Array.isArray(value?.weeklyAdReviews)
-      ? value.weeklyAdReviews.map((entry, index) => ({
-          id: entry?.id || `weekly-${index + 1}`,
-          weekStart: entry?.weekStart || "",
-          productId: String(entry?.productId || ""),
-          launchedAds: entry?.launchedAds === "no" ? "no" : "yes",
-          averageCplTzs: Math.max(0, parseLooseNumber(entry?.averageCplTzs)),
-          notes: String(entry?.notes || ""),
-          createdAt: entry?.createdAt || null,
-        }))
-      : defaults.weeklyAdReviews,
-    weeklyReviewDraft: {
-      productId: String(value?.weeklyReviewDraft?.productId ?? defaults.weeklyReviewDraft.productId),
-      launchedAds: value?.weeklyReviewDraft?.launchedAds === "no" ? "no" : defaults.weeklyReviewDraft.launchedAds,
-      averageCplTzs: String(value?.weeklyReviewDraft?.averageCplTzs ?? defaults.weeklyReviewDraft.averageCplTzs),
-      notes: String(value?.weeklyReviewDraft?.notes ?? defaults.weeklyReviewDraft.notes),
-    },
-  };
-}
-
-const CONFIRMATION_STATUS_RULES = {
-  new: { bucket: "new" },
-  "new-order": { bucket: "new" },
-  confirmed: { bucket: "confirmed" },
-  cancelled: { bucket: "cancelled" },
-  cancel: { bucket: "cancelled" },
-  canceled: { bucket: "cancelled" },
-  unreached: { bucket: "pending" },
-  unreachable: { bucket: "pending" },
-  "not-reachable": { bucket: "pending" },
-  "not-joined": { bucket: "pending" },
-  "not-joinable": { bucket: "pending" },
-  "not-joignable": { bucket: "pending" },
-  "non-joignable": { bucket: "pending" },
-  "n-est-pas-joignable": { bucket: "pending" },
-  "unreachable-text-sent": { bucket: "pending" },
-  "no-reply": { bucket: "pending" },
-  "no-answer": { bucket: "pending" },
-  pending: { bucket: "pending" },
-  scheduled: { bucket: "pending" },
-  remind: { bucket: "pending" },
-  "client-to-revert": { bucket: "pending" },
-  reprogrammed: { bucket: "pending" },
-  "back-to-stock": { bucket: "cancelled" },
-  "out-of-stock": { bucket: "cancelled" },
-  "out-of-region": { bucket: "cancelled" },
-  wrong: { bucket: "cancelled" },
-  "wrong-number": { bucket: "cancelled" },
-  spam: { bucket: "cancelled" },
-  double: { bucket: "cancelled" },
-};
-
-const SHIPPING_STATUS_RULES = {
-  confirmed: { bucket: "to_prepare" },
-  "to-prepare": { bucket: "to_prepare" },
-  to_prepare: { bucket: "to_prepare" },
-  "in-preparation": { bucket: "to_prepare" },
-  prepared: { bucket: "to_prepare" },
-  "in-delivery": { bucket: "shipped" },
-  shipped: { bucket: "shipped" },
-  shipping: { bucket: "shipped" },
-  "sending-to-agent": { bucket: "shipped" },
-  received: { bucket: "delivered" },
-  paid: { bucket: "delivered" },
-  facture: { bucket: "delivered" },
-  factured: { bucket: "delivered" },
-  factur: { bucket: "delivered" },
-  delivered: { bucket: "delivered" },
-  "already-delivered": { bucket: "delivered" },
-  return: { bucket: "returned" },
-  returned: { bucket: "returned" },
-  returning: { bucket: "returned" },
-  rejected: { bucket: "returned" },
-  refunded: { bucket: "returned" },
-  damaged: { bucket: "returned" },
-  report: { bucket: "returned" },
-  reported: { bucket: "returned" },
-  cancelled: { bucket: "returned" },
-  canceled: { bucket: "returned" },
-  "return-from-agency": { bucket: "returned" },
-  "back-to-stock": { bucket: "returned" },
-  "returned-to-stock": { bucket: "returned" },
-  "return-to-stock": { bucket: "returned" },
-  "return-stock": { bucket: "returned" },
-  "return-request": { bucket: "returned" },
-  "validate-return": { bucket: "returned" },
-  "out-of-stock": { bucket: "returned" },
-  "on-hold": { bucket: "to_prepare" },
-};
-
-const DEFAULT_CONFIRMATION_STATUSES = [
-  "new-order",
-  "confirmed",
-  "pending",
-  "unreached",
-  "cancelled",
-  "out-of-stock",
-  "wrong",
-  "remind",
-  "client-to-revert",
-  "spam",
-  "double",
-];
-
-const DEFAULT_POST_CONFIRMATION_STATUSES = [
-  "to-prepare",
-  "shipped",
-  "delivered",
-  "return",
-  "returned",
-  "rejected",
-  "refunded",
-  "cancelled",
-  "out-of-stock",
-  "on-hold",
-  "return-from-agency",
-  "returning",
-  "validate-return",
-  "already-delivered",
-  "return-request",
-  "reprogrammed",
-  "unreachable",
-];
-
-function getEmptyExpeditionForm() {
-  return {
-    name: "",
-    source: "china",
-    sellingPrice: 0,
-    purchaseUnitPrice: 0,
-    totalQty: 0,
-    shippingTotal: 0,
-    otherCharges: 0,
-    delivery: 0,
-    estimatedArrivalDays: 3,
-    supplierName: "",
-    supplierContact: "",
-    lifecycleStatus: "test",
-    defectRate: 0,
-    notes: "",
-    offers: [],
-  };
-}
-
-function getEmptyCustomerForm(productId = "P001") {
-  return {
-    customerName: "",
-    phone: "",
-    city: "",
-    address: "",
-    productId,
-    quantity: 1,
-    orderDate: getTodayString(),
-    paymentMethod: "COD",
-    status: "new-order",
-    notes: "",
-    leadSource: "manual",
-    campaignName: "",
-    adsetName: "",
-    creativeName: "",
-    priority: "normal",
-    customerType: "new",
-    callAttempts: 0,
-    cancelReason: "",
-    unreachedReason: "",
-    carrierName: "",
-    trackingNumber: "",
-    expectedDeliveryDate: "",
-    returnReason: "",
-  };
-}
-
-function getDefaultSituationData() {
-  return {
-    salaries: [],
-    fixedCharges: [],
-    adInputs: {},
-    hourlyAdsSnapshots: [],
-    cumulativeAdsTotalTzs: 0,
-    cumulativeAdsByProduct: {},
-    lastObservedAdsSpendTzs: 0,
-    lastObservedAdsByProduct: {},
-    lastAdsAccumulatedAt: null,
-    weeklyAdReviews: [],
-    weeklyReviewDraft: {
-      productId: "",
-      launchedAds: "yes",
-      averageCplTzs: "",
-      notes: "",
-    },
-  };
-}
-
-function getDefaultMetaAdsState() {
-  const today = getTodayString();
-  return {
-    accessToken: "",
-    accountId: "",
-    dateStart: addDaysToDateString(today, -6),
-    dateEnd: today,
-    campaignMappings: {},
-    autoSync: true,
-    autoSyncIntervalMinutes: 3,
-    lastSyncAt: null,
-    lastSyncSummary: null,
-    lifetimeSpendTzs: 0,
-    lastLifetimeSpendSyncDate: null,
-    lifetimeSpendCapturedAt: null,
-    dailySpendSnapshots: [],
-  };
-}
-
-function sanitizeServiceForm(value) {
-  const totalLeads = Math.max(0, parseLooseNumber(value?.totalLeads));
-  const adSpendUsd = Math.max(0, parseLooseNumber(value?.adSpendUsd));
-  const explicitCplUsd = Math.max(0, parseLooseNumber(value?.cplUsd));
-
-  return {
-    totalLeads: totalLeads || 0,
-    confirmationRate: Math.max(0, parseLooseNumber(value?.confirmationRate)),
-    deliveryRate: Math.max(0, parseLooseNumber(value?.deliveryRate)),
-    sellingPriceTzs: Math.max(0, parseLooseNumber(value?.sellingPriceTzs)),
-    productCostTzs: Math.max(0, parseLooseNumber(value?.productCostTzs)),
-    cplUsd: explicitCplUsd > 0 ? explicitCplUsd : totalLeads > 0 ? adSpendUsd / totalLeads : 0,
-  };
-}
-
-function sanitizeMetaAdsState(value) {
-  const defaults = getDefaultMetaAdsState();
-  return {
-    accessToken: String(value?.accessToken || defaults.accessToken),
-    accountId: String(value?.accountId || defaults.accountId),
-    dateStart: String(value?.dateStart || defaults.dateStart),
-    dateEnd: String(value?.dateEnd || defaults.dateEnd),
-    campaignMappings:
-      value?.campaignMappings && typeof value.campaignMappings === "object"
-        ? Object.fromEntries(
-            Object.entries(value.campaignMappings).map(([campaignId, productId]) => [String(campaignId), String(productId || "")])
-          )
-        : defaults.campaignMappings,
-    autoSync: value?.autoSync !== undefined ? Boolean(value.autoSync) : defaults.autoSync,
-    autoSyncIntervalMinutes: Math.max(1, Math.round(Number(value?.autoSyncIntervalMinutes || defaults.autoSyncIntervalMinutes))),
-    lastSyncAt: value?.lastSyncAt || null,
-    lifetimeSpendTzs: Math.max(0, parseLooseNumber(value?.lifetimeSpendTzs)),
-    lastLifetimeSpendSyncDate: value?.lastLifetimeSpendSyncDate || null,
-    lifetimeSpendCapturedAt: value?.lifetimeSpendCapturedAt || null,
-    dailySpendSnapshots: Array.isArray(value?.dailySpendSnapshots)
-      ? value.dailySpendSnapshots
-          .map((entry, index) => ({
-            id: entry?.id || `meta-daily-${index + 1}`,
-            bucket: String(entry?.bucket || ""),
-            totalSpendTzs: Math.max(0, parseLooseNumber(entry?.totalSpendTzs)),
-            newSpendTzs: Math.max(0, parseLooseNumber(entry?.newSpendTzs)),
-            capturedAt: entry?.capturedAt || null,
-            source: String(entry?.source || "meta_maximum"),
-          }))
-          .sort((a, b) => String(b.bucket || "").localeCompare(String(a.bucket || "")))
-      : defaults.dailySpendSnapshots,
-    lastSyncSummary:
-      value?.lastSyncSummary && typeof value.lastSyncSummary === "object"
-        ? {
-            since: String(value.lastSyncSummary.since || ""),
-            until: String(value.lastSyncSummary.until || ""),
-            matchedProducts: Math.max(0, Number(value.lastSyncSummary.matchedProducts || 0)),
-            matchedRows: Math.max(0, Number(value.lastSyncSummary.matchedRows || 0)),
-            totalSpendTzs: Math.max(0, parseLooseNumber(value.lastSyncSummary.totalSpendTzs)),
-            totalLeads: Math.max(0, Number(value.lastSyncSummary.totalLeads || 0)),
-            accountTotalSpendTzs: Math.max(0, parseLooseNumber(value.lastSyncSummary.accountTotalSpendTzs)),
-          }
-        : null,
-  };
-}
-
-const STATUS_COLOR_OVERRIDES = {
-  new: "#4f7cf3",
-  "new-order": "#4f7cf3",
-  pending: "#67e8f9",
-  unreached: "#d946ef",
-  unreachable: "#ef4444",
-  "unreachable-text-sent": "#65cfd0",
-  scheduled: "#fde68a",
-  remind: "#16a34a",
-  "client-to-revert": "#d946ef",
-  reprogrammed: "#8b0f6a",
-  confirmed: "#84cc16",
-  cancelled: "#ef4444",
-  canceled: "#ef4444",
-  "back-to-stock": "#f59e0b",
-  "out-of-stock": "#ea7a1f",
-  "out-of-region": "#fdba74",
-  wrong: "#f87171",
-  "wrong-number": "#f87171",
-  spam: "#111111",
-  double: "#111111",
-  "to-prepare": "#f59e0b",
-  "in-preparation": "#f59e0b",
-  prepared: "#a5b4fc",
-  shipped: "#24b26b",
-  shipping: "#24b26b",
-  "in-delivery": "#67e8f9",
-  "sending-to-agent": "#d8d59f",
-  received: "#3149b8",
-  paid: "#16a34a",
-  facture: "#84cc16",
-  factured: "#84cc16",
-  factur: "#84cc16",
-  delivered: "#3149b8",
-  "already-delivered": "#60d61a",
-  return: "#1395b2",
-  returned: "#1395b2",
-  returning: "#c21899",
-  rejected: "#ef4444",
-  refunded: "#d7d10d",
-  damaged: "#d1d5db",
-  report: "#f4e46e",
-  reported: "#f4e46e",
-  "return-from-agency": "#0f766e",
-  "return-stock": "#dfe9c5",
-  "return-request": "#ef4444",
-  "validate-return": "#41a1f1",
-  "on-hold": "#d9e234",
-};
-
-function formatStatusLabel(status) {
-  const key = normalizeOrderStatus(status);
-  const knownLabels = {
-    new: "New Order",
-    "new-order": "New Order",
-    confirmed: "Confirmed",
-    delivered: "Delivered",
-    cancelled: "Cancelled",
-    unreached: "Unreached",
-    "to-prepare": "To Prepare",
-    "on-hold": "On Hold",
-    refunded: "Refunded",
-    "out-of-stock": "Out Of Stock",
-    "client-to-revert": "Client To Revert",
-    "return-request": "Return Request",
-    "validate-return": "Validate Return",
-    "already-delivered": "Already Delivered",
-  };
-
-  if (knownLabels[key]) return knownLabels[key];
-
-  return key
-    .split("-")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function getConfirmationStatusRule(status) {
-  return CONFIRMATION_STATUS_RULES[normalizeOrderStatus(status)] || null;
-}
-
-function getShippingStatusRule(status) {
-  return SHIPPING_STATUS_RULES[normalizeOrderStatus(status)] || null;
-}
-
-function getConfirmationBucket(status) {
-  return getConfirmationStatusRule(status)?.bucket || "pending";
-}
-
-function getShippingBucket(status) {
-  return getShippingStatusRule(status)?.bucket || "to_prepare";
-}
-
-function getStatusSemantic(status) {
-  const normalized = normalizeHeaderName(String(status || "").replace(/-/g, " "));
-  if (!normalized) return "new";
-  if (/\b(delivered|livre|livree|livrees|received|completed|complete|success|done)\b/.test(normalized)) return "delivered";
-  if (/\b(cancelled|canceled|cancel|annule|annulation|rejected|reject|refused|refuse|failed|failure|returned|return|unresponsive|unreachable)\b/.test(normalized)) return "cancelled";
-  if (normalized.includes("no answer") || normalized.includes("not responding")) return "cancelled";
-  if (/\b(confirmed|confirm|validation|validated|approved|prepare|prepared|shipping|shipped|dispatch|dispatched|expedie|expedition|transit|courier|route|delivery|livraison)\b/.test(normalized)) return "confirmed";
-  if (/\b(new|pending|nouveau|lead|open|fresh)\b/.test(normalized)) return "new";
-  return "other";
-}
-
-function getStatusColor(status) {
-  const key = normalizeOrderStatus(status);
-  if (STATUS_COLOR_OVERRIDES[key]) return STATUS_COLOR_OVERRIDES[key];
-
-  const semantic = getStatusSemantic(status);
-  if (semantic === "delivered") return "#16a34a";
-  if (semantic === "confirmed") return "#f59e0b";
-  if (semantic === "cancelled") return "#dc2626";
-  if (semantic === "new") return "#64748b";
-
-  const hash = key.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return statusPalette[hash % statusPalette.length];
-}
-
-function getStatusBadgeStyle(status) {
-  const color = getStatusColor(status);
-  return {
-    ...styles.badge,
-    background: `${color}14`,
-    color,
-    border: `1px solid ${color}33`,
-    justifyContent: "center",
-    whiteSpace: "nowrap",
-  };
-}
-
-function excelDateToInput(value) {
-  if (value == null || value === "") return getTodayString();
-  if (typeof value === "number") {
-    const parsed = XLSX.SSF.parse_date_code(value);
-    if (!parsed) return getTodayString();
-    return formatDateInput(new Date(parsed.y, parsed.m - 1, parsed.d));
-  }
-
-  const raw = String(value).trim();
-  if (!raw) return getTodayString();
-  const isoMatch = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (isoMatch) {
-    return `${isoMatch[1]}-${String(isoMatch[2]).padStart(2, "0")}-${String(isoMatch[3]).padStart(2, "0")}`;
-  }
-
-  const frMatch = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
-  if (frMatch) {
-    return `${frMatch[3]}-${String(frMatch[2]).padStart(2, "0")}-${String(frMatch[1]).padStart(2, "0")}`;
-  }
-
-  const fallback = new Date(raw);
-  return Number.isNaN(fallback.getTime()) ? getTodayString() : formatDateInput(fallback);
-}
-
-function buildNextId(items, prefix) {
-  const maxId = items.reduce((max, item) => {
-    const match = String(item?.id || "").match(new RegExp(`^${prefix}(\\d+)$`));
-    return match ? Math.max(max, Number(match[1])) : max;
-  }, 0);
-
-  return `${prefix}${String(maxId + 1).padStart(3, "0")}`;
-}
-
-function buildHistoryEntry({ action, source = "system", details = "" }) {
-  return {
-    id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    at: new Date().toISOString(),
-    action: String(action || "updated"),
-    source: String(source || "system"),
-    details: String(details || ""),
-  };
-}
-
-function sanitizeHistoryEntries(history) {
-  if (!Array.isArray(history)) return [];
-  return history
-    .map((entry, index) => ({
-      id: entry?.id || `hist-${index + 1}`,
-      at: entry?.at || null,
-      action: String(entry?.action || "updated"),
-      source: String(entry?.source || "system"),
-      details: String(entry?.details || ""),
-    }))
-    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
-}
-
-function appendCustomerHistory(customer, entry) {
-  const history = sanitizeHistoryEntries(customer?.history);
-  return [entry, ...history].slice(0, 40);
-}
-
-function getWeekStartString(value) {
-  const date = parseDateInput(value) || new Date(value || Date.now());
-  if (!date || Number.isNaN(date.getTime())) return getTodayString();
-  return formatDateInput(startOfWeek(date));
-}
-
-function getWeekEndString(weekStartString) {
-  return addDaysToDateString(weekStartString, 6);
-}
-
-function getWeekLabel(weekStartString) {
-  const safeStart = weekStartString || getTodayString();
-  return `${safeStart} -> ${getWeekEndString(safeStart)}`;
-}
-
-function getDayBucket(value = Date.now()) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function hasMeaningfulWorkspaceData(snapshot = {}) {
-  return (
-    (Array.isArray(snapshot.products) && snapshot.products.length > 0) ||
-    (Array.isArray(snapshot.customers) && snapshot.customers.length > 0) ||
-    (Array.isArray(snapshot.tracking) && snapshot.tracking.length > 0)
-  );
-}
-
-function sanitizeCustomerRecord(customer) {
-  const separated = inferSeparatedStatuses(customer);
-  return {
-    ...customer,
-    quantity: Math.max(1, Number(customer?.quantity || 1)),
-    assignedTo: String(customer?.assignedTo || ""),
-    leadSource: String(customer?.leadSource || "manual"),
-    campaignName: String(customer?.campaignName || ""),
-    adsetName: String(customer?.adsetName || ""),
-    creativeName: String(customer?.creativeName || ""),
-    priority: String(customer?.priority || "normal"),
-    customerType: String(customer?.customerType || "new"),
-    callAttempts: Math.max(0, Math.round(Number(customer?.callAttempts || 0))),
-    cancelReason: String(customer?.cancelReason || ""),
-    unreachedReason: String(customer?.unreachedReason || ""),
-    returnReason: String(customer?.returnReason || ""),
-    carrierName: String(customer?.carrierName || ""),
-    trackingNumber: String(customer?.trackingNumber || ""),
-    expectedDeliveryDate: String(customer?.expectedDeliveryDate || ""),
-    actualDeliveryDate: String(customer?.actualDeliveryDate || ""),
-    history: sanitizeHistoryEntries(customer?.history),
-    confirmationStatus: separated.confirmationStatus,
-    shippingStatus: separated.shippingStatus,
-    status: separated.effectiveStatus,
-  };
-}
-
-function normalizePhoneValue(value) {
-  return String(value || "").replace(/\D+/g, "");
-}
-
-function inferSeparatedStatuses(customer) {
-  const rawStatus = normalizeOrderStatus(customer?.status || customer?.confirmationStatus || customer?.shippingStatus);
-  const explicitConfirmation = normalizeOrderStatus(customer?.confirmationStatus);
-  const explicitShipping = normalizeOrderStatus(customer?.shippingStatus);
-  const hasShippingImport = Boolean(customer?.lastShippingImportedAt);
-  const isKnownShipping = Boolean(getShippingStatusRule(rawStatus));
-  const isKnownConfirmation = Boolean(getConfirmationStatusRule(rawStatus));
-
-  let confirmationStatus = explicitConfirmation || "";
-  let shippingStatus = explicitShipping || "";
-
-  if (!confirmationStatus && !shippingStatus) {
-    if (isKnownShipping && !isKnownConfirmation) {
-      shippingStatus = rawStatus;
-      confirmationStatus = "confirmed";
-    } else if (isKnownShipping && hasShippingImport && rawStatus !== "confirmed") {
-      shippingStatus = rawStatus;
-      confirmationStatus = "confirmed";
-    } else {
-      confirmationStatus = rawStatus || "new";
-    }
-  }
-
-  if (!shippingStatus && hasShippingImport && rawStatus && isKnownShipping) {
-    shippingStatus = rawStatus;
-  }
-
-  if (!confirmationStatus && shippingStatus) {
-    confirmationStatus = "confirmed";
-  }
-
-  if (!confirmationStatus) confirmationStatus = "new";
-  if (confirmationStatus && !shippingStatus && isKnownShipping && confirmationStatus === "confirmed" && rawStatus !== "confirmed") {
-    shippingStatus = rawStatus;
-  }
-
-  return {
-    confirmationStatus,
-    shippingStatus,
-    effectiveStatus: shippingStatus || confirmationStatus,
-  };
-}
-
-function getCustomerConfirmationStatus(customer) {
-  return inferSeparatedStatuses(customer).confirmationStatus;
-}
-
-function getCustomerShippingStatus(customer) {
-  return inferSeparatedStatuses(customer).shippingStatus;
-}
-
-function getCustomerEffectiveStatus(customer) {
-  return inferSeparatedStatuses(customer).effectiveStatus;
-}
-
-function isConfirmationConfirmed(status) {
-  return getConfirmationBucket(status) === "confirmed";
-}
-
-function isConfirmationNew(status) {
-  return getConfirmationBucket(status) === "new";
-}
-
-function isConfirmationCancelled(status) {
-  return getConfirmationBucket(status) === "cancelled";
-}
-
-function isShippingDelivered(status) {
-  return getShippingBucket(status) === "delivered";
-}
-
-function isShippingInProgress(status) {
-  const bucket = getShippingBucket(status);
-  return bucket === "to_prepare" || bucket === "shipped";
-}
-
-function isShippingReturned(status) {
-  return getShippingBucket(status) === "returned";
-}
-
-function getUnitProductCostUSD(product) {
-  if (!product) return 0;
-  const qty = Number(product.totalQty || 0);
-  const purchaseUnitPrice = Number(product.purchaseUnitPrice || 0);
-  const shippingTotalUsd = Number(product.shippingTotal || 0) / USD_TO_TZS;
-  const otherChargesUsd = Number(product.otherCharges || 0) / USD_TO_TZS;
-  const totalImportCost = purchaseUnitPrice * qty + shippingTotalUsd + otherChargesUsd;
-  return qty > 0 ? totalImportCost / qty : 0;
-}
 
 function getDecisionStyle(decision) {
   if (["SCALE", "GOOD PRODUCT", "In Stock", "Arrived", "OK"].includes(decision)) {
@@ -1617,21 +614,17 @@ export default function App() {
   const sharedHydratingRef = useRef(false);
   const sharedVersionRef = useRef(0);
   const lastSharedPayloadRef = useRef("");
+  const latestSharedStateRef = useRef({});
+  const queuedSharedSnapshotRef = useRef(null);
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1280 : window.innerWidth
   );
   const [activePage, setActivePage] = useState("dashboard");
   const [selectedService, setSelectedService] = useState("standard");
   const [selectedCountry, setSelectedCountry] = useState("tanzania");
-  const [serviceForm, setServiceForm] = useState({
-    totalLeads: 150,
-    confirmationRate: 50,
-    deliveryRate: 50,
-    sellingPriceTzs: 39000,
-    productCostTzs: 15000,
-    cplUsd: 950 / 150,
-  });
+  const [serviceForm, setServiceForm] = useState(getDefaultServiceForm);
   const [situationData, setSituationData] = useState(() => {
+    if (supabaseEnabled) return getDefaultSituationData();
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? sanitizeSituationData(JSON.parse(raw).situationData) : getDefaultSituationData();
@@ -1675,14 +668,16 @@ export default function App() {
   const [shippingImportNotice, setShippingImportNotice] = useState("");
   const [shippingImportDetails, setShippingImportDetails] = useState(null);
   const [importMeta, setImportMeta] = useState(() => {
+    if (supabaseEnabled) return getDefaultImportMeta();
     try {
       const raw = localStorage.getItem(IMPORT_META_KEY);
-      return raw ? JSON.parse(raw) : { lastOrdersImportAt: null, lastShippingImportAt: null };
+      return raw ? JSON.parse(raw) : getDefaultImportMeta();
     } catch {
-      return { lastOrdersImportAt: null, lastShippingImportAt: null };
+      return getDefaultImportMeta();
     }
   });
   const [metaAdsState, setMetaAdsState] = useState(() => {
+    if (supabaseEnabled) return getDefaultMetaAdsState();
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? sanitizeMetaAdsState(JSON.parse(raw).metaAdsState) : getDefaultMetaAdsState();
@@ -1736,6 +731,7 @@ export default function App() {
   const [auditSearch, setAuditSearch] = useState("");
 
   const [products, setProducts] = useState(() => {
+    if (supabaseEnabled) return [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? (JSON.parse(raw).products || initialProducts).map(sanitizeProductRecord) : initialProducts.map(sanitizeProductRecord);
@@ -1745,6 +741,7 @@ export default function App() {
   });
 
   const [tracking, setTracking] = useState(() => {
+    if (supabaseEnabled) return [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? JSON.parse(raw).tracking || initialTracking : initialTracking;
@@ -1754,6 +751,7 @@ export default function App() {
   });
 
   const [customers, setCustomers] = useState(() => {
+    if (supabaseEnabled) return [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? (JSON.parse(raw).customers || INITIAL_CUSTOMERS).map(sanitizeCustomerRecord) : INITIAL_CUSTOMERS;
@@ -1775,21 +773,53 @@ export default function App() {
     [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking]
   );
 
+  useEffect(() => {
+    latestSharedStateRef.current = {
+      products,
+      tracking,
+      customers,
+      serviceForm,
+      situationData,
+      metaAdsState,
+      importMeta,
+    };
+  }, [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking]);
+
   const applySharedStateSnapshot = useCallback((snapshot = {}) => {
+    const cloudDefaults = getDefaultCloudWorkspaceState();
+    const fallbackSnapshot = supabaseEnabled
+      ? cloudDefaults
+      : {
+          products: initialProducts.map(sanitizeProductRecord),
+          tracking: [...initialTracking],
+          customers: INITIAL_CUSTOMERS.map(sanitizeCustomerRecord),
+          serviceForm: getDefaultServiceForm(),
+          situationData: getDefaultSituationData(),
+          metaAdsState: getDefaultMetaAdsState(),
+          importMeta: getDefaultImportMeta(),
+        };
+    const normalizedSnapshot = {
+      products: Array.isArray(snapshot.products) ? snapshot.products.map(sanitizeProductRecord) : fallbackSnapshot.products,
+      tracking: Array.isArray(snapshot.tracking) ? snapshot.tracking : fallbackSnapshot.tracking,
+      customers: Array.isArray(snapshot.customers) ? snapshot.customers.map(sanitizeCustomerRecord) : fallbackSnapshot.customers,
+      serviceForm: sanitizeServiceForm(snapshot.serviceForm || fallbackSnapshot.serviceForm),
+      situationData: sanitizeSituationData(snapshot.situationData || fallbackSnapshot.situationData),
+      metaAdsState: sanitizeMetaAdsState(snapshot.metaAdsState || fallbackSnapshot.metaAdsState),
+      importMeta: {
+        lastOrdersImportAt: snapshot.importMeta?.lastOrdersImportAt || null,
+        lastShippingImportAt: snapshot.importMeta?.lastShippingImportAt || null,
+      },
+    };
+
     sharedHydratingRef.current = true;
     try {
-      if (Array.isArray(snapshot.products)) setProducts(snapshot.products.map(sanitizeProductRecord));
-      if (Array.isArray(snapshot.tracking)) setTracking(snapshot.tracking);
-      if (Array.isArray(snapshot.customers)) setCustomers(snapshot.customers.map(sanitizeCustomerRecord));
-      if (snapshot.serviceForm) setServiceForm(sanitizeServiceForm(snapshot.serviceForm));
-      if (snapshot.situationData) setSituationData(sanitizeSituationData(snapshot.situationData));
-      if (snapshot.metaAdsState) setMetaAdsState(sanitizeMetaAdsState(snapshot.metaAdsState));
-      if (snapshot.importMeta) {
-        setImportMeta({
-          lastOrdersImportAt: snapshot.importMeta.lastOrdersImportAt || null,
-          lastShippingImportAt: snapshot.importMeta.lastShippingImportAt || null,
-        });
-      }
+      setProducts(normalizedSnapshot.products);
+      setTracking(normalizedSnapshot.tracking);
+      setCustomers(normalizedSnapshot.customers);
+      setServiceForm(normalizedSnapshot.serviceForm);
+      setSituationData(normalizedSnapshot.situationData);
+      setMetaAdsState(normalizedSnapshot.metaAdsState);
+      setImportMeta(normalizedSnapshot.importMeta);
     } finally {
       window.setTimeout(() => {
         sharedHydratingRef.current = false;
@@ -1798,6 +828,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (supabaseEnabled) return;
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
@@ -1892,12 +923,35 @@ export default function App() {
         }
         if (cancelled) return;
         const remoteState = payload.state || {};
+        const cloudMode = supabaseEnabled && cloudAuth.user;
+
+        if (cloudMode) {
+          applySharedStateSnapshot(remoteState);
+          sharedVersionRef.current = Number(payload.version || 0);
+          lastSharedPayloadRef.current = JSON.stringify(remoteState);
+          setSharedWorkspace({
+            mode: "cloud",
+            available: true,
+            loading: false,
+            saving: false,
+            initialized: true,
+            version: Number(payload.version || 0),
+            updatedAt: payload.updatedAt || null,
+            notice: "Cloud workspace connected",
+          });
+          return;
+        }
+
         const remoteHasData = hasMeaningfulWorkspaceData(remoteState);
-        const localSnapshot = buildSharedStateSnapshot();
+        const remoteLooksFresh =
+          !remoteHasData &&
+          Number(payload.version || 0) <= 0 &&
+          !payload.updatedAt;
+        const localSnapshot = latestSharedStateRef.current || {};
         const localHasData = hasMeaningfulWorkspaceData(localSnapshot);
         let recoveredFromAutoBackup = false;
 
-        if (!remoteHasData && !localHasData) {
+        if (!cloudMode && remoteLooksFresh && !localHasData) {
           try {
             const rawAutoBackup = localStorage.getItem(AUTO_BACKUP_KEY);
             if (rawAutoBackup) {
@@ -1921,7 +975,7 @@ export default function App() {
           }
         }
 
-        const shouldKeepLocal = !remoteHasData && localHasData;
+        const shouldKeepLocal = remoteLooksFresh && localHasData;
 
         if (!shouldKeepLocal && !recoveredFromAutoBackup) {
           applySharedStateSnapshot(remoteState);
@@ -1961,7 +1015,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [applySharedStateSnapshot, buildSharedStateSnapshot, cloudAuth.ready, cloudAuth.user]);
+  }, [applySharedStateSnapshot, cloudAuth.ready, cloudAuth.user]);
 
   useEffect(() => {
     localStorage.setItem(IMPORT_META_KEY, JSON.stringify(importMeta));
@@ -2051,25 +1105,45 @@ export default function App() {
     });
   }, [currentTime, tracking]);
 
-  useEffect(() => {
-    if (!sharedWorkspace.initialized) return;
-    if (sharedHydratingRef.current) return;
-    if (supabaseEnabled && !cloudAuth.user) return;
+  const persistSharedSnapshot = useCallback(
+    async function persistSharedSnapshotInner(
+      nextSnapshot,
+      {
+        progressNotice = supabaseEnabled ? "Saving cloud changes..." : "Saving shared workspace...",
+        successNotice = supabaseEnabled ? "Cloud workspace synced" : "Shared workspace synced",
+        failurePrefix = supabaseEnabled ? "Cloud workspace sync failed" : "Shared workspace sync failed",
+      } = {}
+    ) {
+      if (!sharedWorkspace.initialized) return true;
+      if (supabaseEnabled && !cloudAuth.user) return false;
 
-    const snapshot = buildSharedStateSnapshot();
-    const serialized = JSON.stringify(snapshot);
-    if (serialized === lastSharedPayloadRef.current) return;
+      const serialized = JSON.stringify(nextSnapshot || {});
+      if (serialized === lastSharedPayloadRef.current) return true;
 
-    let cancelled = false;
+      if (sharedSyncLockRef.current) {
+        queuedSharedSnapshotRef.current = {
+          snapshot: nextSnapshot,
+          options: { progressNotice, successNotice, failurePrefix },
+        };
+        return false;
+      }
 
-    const pushSharedWorkspace = async () => {
-      if (sharedSyncLockRef.current) return;
       sharedSyncLockRef.current = true;
-      setSharedWorkspace((prev) => ({ ...prev, saving: true }));
+      latestSharedStateRef.current = nextSnapshot;
+      lastSharedPayloadRef.current = serialized;
+      setSharedWorkspace((prev) => ({
+        ...prev,
+        mode: supabaseEnabled ? "cloud" : "shared",
+        available: true,
+        loading: false,
+        saving: true,
+        notice: progressNotice,
+      }));
+
       try {
         let payload;
         if (supabaseEnabled && cloudAuth.user) {
-          const saved = await saveCloudWorkspace(snapshot, {
+          const saved = await saveCloudWorkspace(nextSnapshot, {
             workspaceId: supabaseWorkspaceId,
             userId: cloudAuth.user.id,
           });
@@ -2078,53 +1152,118 @@ export default function App() {
           const response = await fetch(getSharedApiBase(), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ state: snapshot }),
+            body: JSON.stringify({ state: nextSnapshot }),
           });
           const remotePayload = await response.json().catch(() => ({}));
-          if (!response.ok || !remotePayload?.ok) throw new Error(remotePayload?.error || "Unable to save shared workspace.");
+          if (!response.ok || !remotePayload?.ok) {
+            throw new Error(remotePayload?.error || "Unable to save shared workspace.");
+          }
           payload = remotePayload;
         }
-        if (cancelled) return;
+
         sharedVersionRef.current = Number(payload.version || sharedVersionRef.current || 0);
         lastSharedPayloadRef.current = serialized;
-        setSharedWorkspace({
+        setSharedWorkspace((prev) => ({
+          ...prev,
           mode: supabaseEnabled ? "cloud" : "shared",
           available: true,
           loading: false,
           saving: false,
           initialized: true,
           version: Number(payload.version || 0),
-          updatedAt: payload.updatedAt || null,
-          notice: supabaseEnabled ? "Cloud workspace synced" : "Shared workspace synced",
-        });
-      } catch {
-        if (cancelled) return;
+          updatedAt: payload.updatedAt || prev.updatedAt || null,
+          notice: successNotice,
+        }));
+        return true;
+      } catch (error) {
+        lastSharedPayloadRef.current = "";
         setSharedWorkspace((prev) => ({
           ...prev,
           mode: prev.available ? (supabaseEnabled ? "cloud" : "shared") : "local",
           available: prev.available,
           loading: false,
           saving: false,
-          notice: prev.available ? (supabaseEnabled ? "Cloud workspace sync delayed" : "Shared workspace sync delayed") : "Local workspace mode",
+          notice: `${failurePrefix}${error instanceof Error && error.message ? `: ${error.message}` : ""}`,
         }));
+        return false;
       } finally {
         sharedSyncLockRef.current = false;
+        const queued = queuedSharedSnapshotRef.current;
+        queuedSharedSnapshotRef.current = null;
+        if (queued) {
+          window.setTimeout(() => {
+            void persistSharedSnapshotInner(queued.snapshot, queued.options);
+          }, 0);
+        }
       }
-    };
-
-    pushSharedWorkspace();
-    return () => {
-      cancelled = true;
-    };
-  }, [buildSharedStateSnapshot, cloudAuth.user, sharedWorkspace.initialized]);
+    },
+    [cloudAuth.user, sharedWorkspace.initialized]
+  );
 
   useEffect(() => {
-    if (supabaseEnabled) return undefined;
+    if (!sharedWorkspace.initialized) return;
+    if (sharedHydratingRef.current) return;
+    if (supabaseEnabled && !cloudAuth.user) return;
 
+    const snapshot = buildSharedStateSnapshot();
+    latestSharedStateRef.current = snapshot;
+
+    const timeout = window.setTimeout(() => {
+      void persistSharedSnapshot(snapshot);
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [buildSharedStateSnapshot, cloudAuth.user, persistSharedSnapshot, sharedWorkspace.initialized]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const pollSharedWorkspace = async () => {
       try {
+        if (supabaseEnabled) {
+          if (!cloudAuth.user) return;
+
+          const payload = await loadCloudWorkspace(supabaseWorkspaceId);
+          const remoteVersion = Number(payload.version || 0);
+          const remoteSerialized = JSON.stringify(payload.state || {});
+
+          if (!cancelled) {
+            setSharedWorkspace((prev) => ({
+              ...prev,
+              mode: "cloud",
+              available: true,
+              version: remoteVersion,
+              updatedAt: payload.updatedAt || prev.updatedAt,
+              notice:
+                prev.notice === "Cloud workspace unavailable" || prev.notice === "Cloud workspace sync delayed"
+                  ? "Cloud workspace connected"
+                  : prev.notice,
+            }));
+          }
+
+          if (
+            !sharedSyncLockRef.current &&
+            (remoteVersion > Number(sharedVersionRef.current || 0) || remoteSerialized !== lastSharedPayloadRef.current)
+          ) {
+            if (cancelled) return;
+            applySharedStateSnapshot(payload.state || {});
+            sharedVersionRef.current = remoteVersion;
+            lastSharedPayloadRef.current = remoteSerialized;
+            setSharedWorkspace((prev) => ({
+              ...prev,
+              mode: "cloud",
+              available: true,
+              version: remoteVersion,
+              updatedAt: payload.updatedAt || prev.updatedAt,
+              notice: "Cloud workspace updated",
+            }));
+          }
+
+          return;
+        }
+
         const metaResponse = await fetch(`${getSharedApiBase()}/meta`, { headers: { Accept: "application/json" } });
         const metaPayload = await metaResponse.json().catch(() => ({}));
         if (!metaResponse.ok || !metaPayload?.ok) throw new Error(metaPayload?.error || "Unable to check shared workspace.");
@@ -2162,30 +1301,36 @@ export default function App() {
         if (cancelled) return;
         setSharedWorkspace((prev) => ({
           ...prev,
-          mode: prev.available ? prev.mode : "local",
-          available: false,
-          notice: "Local workspace mode",
+          mode: prev.available ? prev.mode : supabaseEnabled ? "cloud" : "local",
+          available: prev.available,
+          notice: supabaseEnabled ? "Cloud workspace sync delayed" : "Local workspace mode",
         }));
       }
     };
 
     pollSharedWorkspace();
-    const interval = window.setInterval(pollSharedWorkspace, 15000);
+    const interval = window.setInterval(pollSharedWorkspace, supabaseEnabled ? 5000 : 15000);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [applySharedStateSnapshot]);
+  }, [applySharedStateSnapshot, cloudAuth.user]);
 
   useEffect(() => {
     if (!supabaseEnabled || !cloudAuth.user) return undefined;
 
     const unsubscribe = subscribeToCloudWorkspace(supabaseWorkspaceId, (payload) => {
       const remoteVersion = Number(payload?.version || 0);
-      if (remoteVersion <= Number(sharedVersionRef.current || 0) || sharedSyncLockRef.current) return;
+      const remoteSerialized = JSON.stringify(payload?.state || {});
+      if (
+        sharedSyncLockRef.current ||
+        (remoteVersion <= Number(sharedVersionRef.current || 0) && remoteSerialized === lastSharedPayloadRef.current)
+      ) {
+        return;
+      }
       applySharedStateSnapshot(payload.state || {});
       sharedVersionRef.current = remoteVersion;
-      lastSharedPayloadRef.current = JSON.stringify(payload.state || {});
+      lastSharedPayloadRef.current = remoteSerialized;
       setSharedWorkspace((prev) => ({
         ...prev,
         mode: "cloud",
@@ -2200,6 +1345,23 @@ export default function App() {
       unsubscribe();
     };
   }, [applySharedStateSnapshot, cloudAuth.user]);
+
+  const persistProductsSnapshot = useCallback(
+    async (nextProducts, notice = "Cloud product catalog synced") => {
+      const nextSnapshot = {
+        ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+        products: nextProducts.map(sanitizeProductRecord),
+      };
+
+      latestSharedStateRef.current = nextSnapshot;
+      return persistSharedSnapshot(nextSnapshot, {
+        progressNotice: "Saving product changes to cloud...",
+        successNotice: notice,
+        failurePrefix: "Cloud product sync failed",
+      });
+    },
+    [persistSharedSnapshot]
+  );
 
   const getProduct = useCallback((id) => products.find((p) => p.id === id), [products]);
   const responsiveColumns = useCallback(
@@ -3038,7 +2200,7 @@ export default function App() {
   const createProductId = () => buildNextId(products, "P");
   const createCustomerId = () => buildNextId(customers, "C");
 
-  const saveExpeditionProduct = () => {
+  const saveExpeditionProduct = async () => {
     if (!expeditionForm.name.trim()) return;
 
     const source = expeditionForm.source || "china";
@@ -3060,9 +2222,10 @@ export default function App() {
       offers: normalizeProductOffers(expeditionForm.offers),
     };
 
+    let nextProducts;
+
     if (editingProductId) {
-      setProducts((prev) =>
-        prev.map((product) =>
+      nextProducts = products.map((product) =>
           product.id === editingProductId
             ? {
                 ...product,
@@ -3071,13 +2234,12 @@ export default function App() {
                 stockOrderedAt: product.stockOrderedAt || getTodayString(),
                 nextArrivalCheckDate:
                   source === "dubai"
-                    ? product.nextArrivalCheckDate || addDaysToDateString(getTodayString(), Number(expeditionForm.estimatedArrivalDays || 0))
-                    : null,
-                stockArrivedAt: source === "dubai" ? product.stockArrivedAt || null : product.stockArrivedAt || getTodayString(),
-              }
-            : product
-        )
-      );
+                      ? product.nextArrivalCheckDate || addDaysToDateString(getTodayString(), Number(expeditionForm.estimatedArrivalDays || 0))
+                      : null,
+                  stockArrivedAt: source === "dubai" ? product.stockArrivedAt || null : product.stockArrivedAt || getTodayString(),
+                }
+              : product
+        );
     } else {
       const newProduct = {
         id: createProductId(),
@@ -3091,8 +2253,15 @@ export default function App() {
         stockArrivedAt: source === "dubai" ? null : getTodayString(),
       };
 
-      setProducts((prev) => [...prev, newProduct]);
+      nextProducts = [...products, newProduct];
     }
+
+    setProducts(nextProducts);
+    latestSharedStateRef.current = {
+      ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+      products: nextProducts.map(sanitizeProductRecord),
+    };
+    await persistProductsSnapshot(nextProducts, editingProductId ? "Cloud product updated" : "Cloud product added");
 
     setEditingProductId(null);
     setExpeditionForm(getEmptyExpeditionForm());
@@ -3154,9 +2323,27 @@ export default function App() {
   };
 
   const deleteProduct = (productId) => {
-    setProducts((prev) => prev.filter((p) => p.id !== productId));
-    setTracking((prev) => prev.filter((t) => t.productId !== productId));
-    setCustomers((prev) => prev.filter((c) => c.productId !== productId));
+    const nextProducts = products.filter((p) => p.id !== productId);
+    const nextTracking = tracking.filter((t) => t.productId !== productId);
+    const nextCustomers = customers.filter((c) => c.productId !== productId);
+
+    setProducts(nextProducts);
+    setTracking(nextTracking);
+    setCustomers(nextCustomers);
+
+    const nextSnapshot = {
+      ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+      products: nextProducts.map(sanitizeProductRecord),
+      tracking: nextTracking,
+      customers: nextCustomers.map(sanitizeCustomerRecord),
+    };
+    latestSharedStateRef.current = nextSnapshot;
+    void persistSharedSnapshot(nextSnapshot, {
+      progressNotice: "Saving product deletion to cloud...",
+      successNotice: "Cloud product deleted",
+      failurePrefix: "Cloud product delete failed",
+    });
+
     if (editingProductId === productId) {
       setEditingProductId(null);
       setExpeditionForm(getEmptyExpeditionForm());
@@ -3372,7 +2559,6 @@ export default function App() {
             "etat confirmation",
             "status confirmation",
             "status de confirmation",
-            "delivery status",
           ]);
           const status = String(rawStatus || "").trim()
             ? normalizeOrderStatus(rawStatus)
@@ -3411,17 +2597,21 @@ export default function App() {
             const normalizedExistingStatus = normalizeOrderStatus(existing.confirmationStatus || existing.status);
             const statusChanged = normalizedExistingStatus !== status;
             const existingShippingStatus = normalizeOrderStatus(existing.shippingStatus);
-            const shippingStatusChanged = Boolean(shippingStatus) && existingShippingStatus !== shippingStatus;
+            const nextShippingStatus = ensureShippingStatusForConfirmed(
+              statusChanged ? status : existing.confirmationStatus || normalizedExistingStatus,
+              shippingStatus || existing.shippingStatus
+            );
+            const shippingStatusChanged = existingShippingStatus !== nextShippingStatus;
             const historyNotes = [];
             if (statusChanged) historyNotes.push(`Confirmation ${formatStatusLabel(normalizedExistingStatus)} -> ${formatStatusLabel(status)}`);
-            if (shippingStatusChanged) historyNotes.push(`Shipping ${formatStatusLabel(existingShippingStatus || "to-prepare")} -> ${formatStatusLabel(shippingStatus)}`);
+            if (shippingStatusChanged) historyNotes.push(`Shipping ${formatStatusLabel(existingShippingStatus || "to-prepare")} -> ${formatStatusLabel(nextShippingStatus)}`);
             if (orderTotalTzs) historyNotes.push(`Order value synced to ${formatTZS(orderTotalTzs)}`);
 
             nextCustomers[existingIndex] = sanitizeCustomerRecord({
               ...existing,
               status: statusChanged ? status : normalizedExistingStatus,
               confirmationStatus: statusChanged ? status : existing.confirmationStatus || normalizedExistingStatus,
-              shippingStatus: shippingStatusChanged ? shippingStatus : existing.shippingStatus || "",
+              shippingStatus: nextShippingStatus,
               paymentMethod: paymentMethod || existing.paymentMethod,
               city: city || existing.city,
               address: address || existing.address,
@@ -3460,7 +2650,7 @@ export default function App() {
             paymentMethod,
             status,
             confirmationStatus: status,
-            shippingStatus,
+            shippingStatus: ensureShippingStatusForConfirmed(status, shippingStatus),
             orderTotalTzs,
             notes,
             sourceOrderId: sourceOrderId || null,
@@ -3702,7 +2892,7 @@ export default function App() {
       paymentMethod: customerForm.paymentMethod,
       status: customerForm.status,
       confirmationStatus: customerForm.status,
-      shippingStatus: "",
+      shippingStatus: ensureShippingStatusForConfirmed(customerForm.status, ""),
       orderTotalTzs: customerFormPricing.totalPrice,
       notes: customerForm.notes.trim(),
       leadSource: customerForm.leadSource,
@@ -3756,6 +2946,7 @@ export default function App() {
               ...c,
               status: nextStatus,
               confirmationStatus: nextStatus,
+              shippingStatus: ensureShippingStatusForConfirmed(nextStatus, c.shippingStatus),
               history: appendCustomerHistory(
                 c,
                 buildHistoryEntry({
@@ -3827,6 +3018,7 @@ export default function App() {
               ...customer,
               status: bulkCustomerStatus,
               confirmationStatus: bulkCustomerStatus,
+              shippingStatus: ensureShippingStatusForConfirmed(bulkCustomerStatus, customer.shippingStatus),
               history: appendCustomerHistory(
                 customer,
                 buildHistoryEntry({
@@ -5363,6 +4555,31 @@ export default function App() {
     [productDetailsRows, productDetailsFilters.rowLimit]
   );
 
+  if (supabaseEnabled && !cloudAuth.ready) {
+    return (
+      <div style={styles.shell}>
+        <div
+          style={{
+            minHeight: "100vh",
+            display: "grid",
+            placeItems: "center",
+            padding: isCompact ? 18 : 32,
+            background:
+              "radial-gradient(circle at top left, rgba(35,88,213,0.12), transparent 32%), radial-gradient(circle at top right, rgba(31,143,95,0.10), transparent 28%), linear-gradient(180deg, #f6f8fc 0%, #eef3fb 100%)",
+          }}
+        >
+          <div style={{ ...styles.card, width: "100%", maxWidth: 560, textAlign: "center", padding: 28 }}>
+            <div style={styles.sectionEyebrow}>Cloud access</div>
+            <div style={{ marginTop: 10, fontSize: 28, fontWeight: 900 }}>Opening your workspace</div>
+            <div style={{ color: textSoft, marginTop: 10, lineHeight: 1.6 }}>
+              Checking your session and preparing the live data feed.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (supabaseEnabled && !cloudAuth.user) {
     return (
       <div style={styles.shell}>
@@ -5441,6 +4658,31 @@ export default function App() {
                   {cloudAuth.loading ? "Connecting..." : cloudAuth.mode === "signup" ? "Create cloud access" : "Open cloud workspace"}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      );
+    }
+
+  if (supabaseEnabled && cloudAuth.user && (!sharedWorkspace.initialized || sharedWorkspace.loading)) {
+    return (
+      <div style={styles.shell}>
+        <div
+          style={{
+            minHeight: "100vh",
+            display: "grid",
+            placeItems: "center",
+            padding: isCompact ? 18 : 32,
+            background:
+              "radial-gradient(circle at top left, rgba(35,88,213,0.12), transparent 32%), radial-gradient(circle at top right, rgba(31,143,95,0.10), transparent 28%), linear-gradient(180deg, #f6f8fc 0%, #eef3fb 100%)",
+          }}
+        >
+          <div style={{ ...styles.card, width: "100%", maxWidth: 620, textAlign: "center", padding: 28 }}>
+            <div style={styles.sectionEyebrow}>Cloud workspace</div>
+            <div style={{ marginTop: 10, fontSize: 28, fontWeight: 900 }}>Syncing live data</div>
+            <div style={{ color: textSoft, marginTop: 10, lineHeight: 1.6 }}>
+              The app is loading the latest shared data from the cloud so every browser sees the same workspace.
             </div>
           </div>
         </div>
