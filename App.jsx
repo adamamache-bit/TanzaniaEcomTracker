@@ -4559,6 +4559,9 @@ export default function App() {
   const showWorkspaceSyncNotice =
     Boolean(sharedWorkspace.notice) &&
     /(failed|unavailable|offline|delayed|error)/i.test(sharedWorkspace.notice);
+  const showCloudAuthNotice =
+    Boolean(cloudAuth.notice) &&
+    /(failed|error|unable|invalid|denied|required)/i.test(cloudAuth.notice);
 
   return (
     <div style={styles.shell}>
@@ -4671,7 +4674,9 @@ export default function App() {
                     <div style={{ marginTop: 8, fontWeight: 800, fontSize: 18 }}>
                       {cloudAuth.user ? cloudAuth.user.email || "Authenticated user" : "Sign in to share the live app"}
                     </div>
-                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.5 }}>{cloudAuth.notice}</div>
+                    {showCloudAuthNotice ? (
+                      <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.5 }}>{cloudAuth.notice}</div>
+                    ) : null}
                     {!cloudAuth.user ? (
                       <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
                         <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr 120px", "1fr 1fr", "1fr"), gap: 10 }}>
@@ -7987,7 +7992,7 @@ export default function App() {
             <div style={styles.sectionEyebrow}>Cloud access</div>
             <div style={{ fontSize: 30, fontWeight: 900, marginTop: 10 }}>Sign in to continue</div>
             <div style={{ color: textSoft, marginTop: 8, lineHeight: 1.6 }}>
-              {cloudAuth.notice || "Use your email to open the live shared workspace."}
+              {showCloudAuthNotice ? cloudAuth.notice : "Use your email to open the live shared workspace."}
             </div>
             <div style={{ display: "grid", gap: 12, marginTop: 22 }}>
               <input
