@@ -2128,6 +2128,7 @@ export default function App() {
 
           const payload = await loadCloudWorkspace(supabaseWorkspaceId);
           const remoteVersion = Number(payload.version || 0);
+          const remoteSerialized = JSON.stringify(payload.state || {});
 
           if (!cancelled) {
             setSharedWorkspace((prev) => ({
@@ -2143,11 +2144,14 @@ export default function App() {
             }));
           }
 
-          if (remoteVersion > Number(sharedVersionRef.current || 0) && !sharedSyncLockRef.current) {
+          if (
+            !sharedSyncLockRef.current &&
+            (remoteVersion > Number(sharedVersionRef.current || 0) || remoteSerialized !== lastSharedPayloadRef.current)
+          ) {
             if (cancelled) return;
             applySharedStateSnapshot(payload.state || {});
             sharedVersionRef.current = remoteVersion;
-            lastSharedPayloadRef.current = JSON.stringify(payload.state || {});
+            lastSharedPayloadRef.current = remoteSerialized;
             setSharedWorkspace((prev) => ({
               ...prev,
               mode: "cloud",
@@ -2218,10 +2222,16 @@ export default function App() {
 
     const unsubscribe = subscribeToCloudWorkspace(supabaseWorkspaceId, (payload) => {
       const remoteVersion = Number(payload?.version || 0);
-      if (remoteVersion <= Number(sharedVersionRef.current || 0) || sharedSyncLockRef.current) return;
+      const remoteSerialized = JSON.stringify(payload?.state || {});
+      if (
+        sharedSyncLockRef.current ||
+        (remoteVersion <= Number(sharedVersionRef.current || 0) && remoteSerialized === lastSharedPayloadRef.current)
+      ) {
+        return;
+      }
       applySharedStateSnapshot(payload.state || {});
       sharedVersionRef.current = remoteVersion;
-      lastSharedPayloadRef.current = JSON.stringify(payload.state || {});
+      lastSharedPayloadRef.current = remoteSerialized;
       setSharedWorkspace((prev) => ({
         ...prev,
         mode: "cloud",
