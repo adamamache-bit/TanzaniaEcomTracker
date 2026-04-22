@@ -37,245 +37,131 @@ import {
 } from "recharts";
 import {
   getCloudSession,
+  listCloudWorkspaceBackups,
   loadCloudWorkspace,
   onCloudAuthStateChange,
+  restoreCloudWorkspaceBackup,
   saveCloudWorkspace,
   signInCloud,
   signOutCloud,
   signUpCloud,
   subscribeToCloudWorkspace,
 } from "./lib/cloudWorkspace";
+import {
+  addDaysToDateString,
+  addMonths,
+  appendCustomerHistory,
+  buildCalendarMatrix,
+  buildHistoryEntry,
+  buildMappedMetaRows,
+  buildNextId,
+  DEFAULT_CONFIRMATION_STATUSES,
+  DEFAULT_POST_CONFIRMATION_STATUSES,
+  ensureShippingStatusForConfirmed,
+  excelDateToInput,
+  formatDateInput,
+  formatInteger,
+  formatLongDate,
+  formatMetaLeadSourceLabel,
+  formatOffersSummary,
+  formatStatusLabel,
+  formatTZS,
+  formatUSD,
+  formatUsdFromTzs,
+  getConfirmationBucket,
+  getCustomerConfirmationStatus,
+  getCustomerEffectiveStatus,
+  getCustomerOrderTotalTzs,
+  getCustomerShippingStatus,
+  getDayBucket,
+  getDefaultCloudWorkspaceState,
+  getDefaultImportMeta,
+  getDefaultMetaAdsState,
+  getDefaultServiceForm,
+  getDefaultSituationData,
+  getEmptyCustomerForm,
+  getEmptyExpeditionForm,
+  getMetaApiBase,
+  getProductPricing,
+  getSharedApiBase,
+  getStatusBadgeStyle,
+  getShippingBucket,
+  getStatusColor,
+  getTodayString,
+  getUnitProductCostUSD,
+  getWeekLabel,
+  getWeekStartString,
+  hasMeaningfulWorkspaceData,
+  INITIAL_CUSTOMERS,
+  initialProducts,
+  initialTracking,
+  isConfirmationCancelled,
+  isConfirmationConfirmed,
+  isConfirmationNew,
+  isShippingDelivered,
+  isShippingInProgress,
+  isShippingReturned,
+  matchProductIdFromText,
+  META_RANGE_PRESETS,
+  normalizeHeaderName,
+  normalizeOrderStatus,
+  normalizePhoneValue,
+  normalizeProductOffers,
+  parseDateInput,
+  parseLooseNumber,
+  sanitizeCustomerRecord,
+  sanitizeMetaAdsState,
+  sanitizeProductRecord,
+  sanitizeServiceForm,
+  sanitizeSituationData,
+  serviceCountryData,
+  startOfMonth,
+  USD_TO_TZS,
+} from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
 
 const STORAGE_KEY = "tanzania-ecom-tracker-v16";
 const AUTO_BACKUP_KEY = "tanzania-ecom-tracker-auto-backup-v1";
 const AUTO_BACKUP_META_KEY = "tanzania-ecom-tracker-auto-backup-meta-v1";
 const IMPORT_META_KEY = "tanzania-ecom-tracker-import-meta-v1";
-const INITIAL_CUSTOMERS = [
-  {
-    id: "C001",
-    customerName: "Amina Yusuf",
-    phone: "+255712345678",
-    city: "Dar es Salaam",
-    address: "Mikocheni, Block A",
-    productId: "P001",
-    quantity: 1,
-    orderDate: "2026-04-12",
-    paymentMethod: "COD",
-    status: "new",
-    notes: "Call in the afternoon",
-  },
-];
 
-const USD_TO_TZS = 2750;
-const META_API_PORT = 4174;
-const SHARED_API_PORT = 4174;
+function readLocalWorkspaceSnapshotFromStorage() {
+  if (typeof window === "undefined") return null;
 
-const initialProducts = [
-  {
-    id: "P001",
-    name: "Electric Callus Remover",
-    source: "china",
-    sellingPrice: 39000,
-    purchaseUnitPrice: 12000,
-    totalQty: 100,
-    shippingTotal: 180000,
-    otherCharges: 70000,
-    delivery: 7000,
-    estimatedArrivalDays: 15,
-    stockArrivalStatus: "arrived",
-    stockOrderedAt: "2026-04-01",
-    nextArrivalCheckDate: null,
-    stockArrivedAt: "2026-04-16",
-  },
-  {
-    id: "P002",
-    name: "Hair Dryer 5 in 1",
-    source: "dubai",
-    sellingPrice: 85000,
-    purchaseUnitPrice: 35000,
-    totalQty: 60,
-    shippingTotal: 220000,
-    otherCharges: 90000,
-    delivery: 9000,
-    estimatedArrivalDays: 3,
-    stockArrivalStatus: "pending",
-    stockOrderedAt: "2026-04-11",
-    nextArrivalCheckDate: "2026-04-14",
-    stockArrivedAt: null,
-  },
-  {
-    id: "P003",
-    name: "Whitening Toothpaste",
-    source: "china",
-    sellingPrice: 25000,
-    purchaseUnitPrice: 6000,
-    totalQty: 200,
-    shippingTotal: 120000,
-    otherCharges: 40000,
-    delivery: 6500,
-    estimatedArrivalDays: 15,
-    stockArrivalStatus: "arrived",
-    stockOrderedAt: "2026-03-15",
-    nextArrivalCheckDate: null,
-    stockArrivedAt: "2026-03-30",
-  },
-];
-
-const initialTracking = [
-  { id: "T001", productId: "P001", adSpend: 100000, orders: 20, confirmed: 15, delivered: 10 },
-  { id: "T002", productId: "P002", adSpend: 160000, orders: 14, confirmed: 9, delivered: 6 },
-  { id: "T003", productId: "P003", adSpend: 80000, orders: 18, confirmed: 12, delivered: 8 },
-];
-
-const serviceCountryData = {
-  standard: {
-    tanzania: {
-      label: "Standard Tanzania",
-      usdToTzs: 2750,
-      serviceFeePercent: 0,
-      deliveryFeeUsdPerDelivered: 8.5,
+  const buildSnapshot = (source = {}, importMetaSource = null) => ({
+    products: Array.isArray(source.products) ? source.products.map(sanitizeProductRecord) : [],
+    tracking: Array.isArray(source.tracking) ? source.tracking : [],
+    customers: Array.isArray(source.customers) ? source.customers.map(sanitizeCustomerRecord) : [],
+    serviceForm: sanitizeServiceForm(source.serviceForm || getDefaultServiceForm()),
+    situationData: sanitizeSituationData(source.situationData || getDefaultSituationData()),
+    metaAdsState: sanitizeMetaAdsState(source.metaAdsState || getDefaultMetaAdsState()),
+    importMeta: {
+      lastOrdersImportAt: source.importMeta?.lastOrdersImportAt || importMetaSource?.lastOrdersImportAt || null,
+      lastShippingImportAt: source.importMeta?.lastShippingImportAt || importMetaSource?.lastShippingImportAt || null,
     },
-  },
-  codzoss: {},
-};
+  });
 
-const formatDateInput = (date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
+  try {
+    const importMetaRaw = localStorage.getItem(IMPORT_META_KEY);
+    const storedImportMeta = importMetaRaw ? JSON.parse(importMetaRaw) : null;
 
-const parseDateInput = (dateString) => {
-  if (!dateString) return null;
-  const [year, month, day] = String(dateString).split("-").map(Number);
-  if (!year || !month || !day) return null;
-  return new Date(year, month - 1, day);
-};
+    const autoBackupRaw = localStorage.getItem(AUTO_BACKUP_KEY);
+    if (autoBackupRaw) {
+      const autoBackup = buildSnapshot(JSON.parse(autoBackupRaw), storedImportMeta);
+      if (hasMeaningfulWorkspaceData(autoBackup)) return autoBackup;
+    }
 
-const getTodayString = () => formatDateInput(new Date());
-const addDaysToDateString = (dateString, days) => {
-  const date = parseDateInput(dateString);
-  if (!date) return "N/A";
-  if (Number.isNaN(date.getTime())) return "—";
-  date.setDate(date.getDate() + Number(days || 0));
-  return formatDateInput(date);
-};
-
-const formatLongDate = (dateString) => {
-  const date = parseDateInput(dateString);
-  if (!date || Number.isNaN(date.getTime())) return "N/A";
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(date);
-};
-
-const addMonths = (date, months) => {
-  const next = new Date(date);
-  next.setMonth(next.getMonth() + months);
-  return next;
-};
-
-const startOfMonth = (date) => new Date(date.getFullYear(), date.getMonth(), 1);
-const endOfMonth = (date) => new Date(date.getFullYear(), date.getMonth() + 1, 0);
-
-const startOfWeek = (date) => {
-  const next = new Date(date);
-  const diff = next.getDate() - next.getDay();
-  return new Date(next.getFullYear(), next.getMonth(), diff);
-};
-
-const buildCalendarMatrix = (baseDate) => {
-  const monthStart = startOfMonth(baseDate);
-  const monthEnd = endOfMonth(baseDate);
-  const startCursor = new Date(monthStart);
-  startCursor.setDate(monthStart.getDate() - monthStart.getDay());
-  const endCursor = new Date(monthEnd);
-  endCursor.setDate(monthEnd.getDate() + (6 - monthEnd.getDay()));
-
-  const days = [];
-  const cursor = new Date(startCursor);
-  while (cursor <= endCursor) {
-    days.push(new Date(cursor));
-    cursor.setDate(cursor.getDate() + 1);
+    const storageRaw = localStorage.getItem(STORAGE_KEY);
+    if (storageRaw) {
+      const localSnapshot = buildSnapshot(JSON.parse(storageRaw), storedImportMeta);
+      if (hasMeaningfulWorkspaceData(localSnapshot)) return localSnapshot;
+    }
+  } catch {
+    // ignore browser backup parsing issue
   }
-  return days;
-};
 
-const META_RANGE_PRESETS = [
-  {
-    label: "Today",
-    getRange: () => {
-      const today = getTodayString();
-      return { start: today, end: today };
-    },
-  },
-  {
-    label: "Yesterday",
-    getRange: () => {
-      const today = getTodayString();
-      const yesterday = addDaysToDateString(today, -1);
-      return { start: yesterday, end: yesterday };
-    },
-  },
-  {
-    label: "Last 7 days",
-    getRange: () => {
-      const today = getTodayString();
-      return { start: addDaysToDateString(today, -6), end: today };
-    },
-  },
-  {
-    label: "Last 14 days",
-    getRange: () => {
-      const today = getTodayString();
-      return { start: addDaysToDateString(today, -13), end: today };
-    },
-  },
-  {
-    label: "Last 30 days",
-    getRange: () => {
-      const today = getTodayString();
-      return { start: addDaysToDateString(today, -29), end: today };
-    },
-  },
-  {
-    label: "This week",
-    getRange: () => {
-      const now = new Date();
-      return { start: formatDateInput(startOfWeek(now)), end: formatDateInput(now) };
-    },
-  },
-  {
-    label: "Last week",
-    getRange: () => {
-      const now = new Date();
-      const thisWeekStart = startOfWeek(now);
-      const lastWeekEnd = new Date(thisWeekStart);
-      lastWeekEnd.setDate(thisWeekStart.getDate() - 1);
-      const lastWeekStart = startOfWeek(lastWeekEnd);
-      return { start: formatDateInput(lastWeekStart), end: formatDateInput(lastWeekEnd) };
-    },
-  },
-  {
-    label: "This month",
-    getRange: () => {
-      const now = new Date();
-      return { start: formatDateInput(startOfMonth(now)), end: formatDateInput(now) };
-    },
-  },
-  {
-    label: "Last month",
-    getRange: () => {
-      const now = new Date();
-      const lastMonth = addMonths(now, -1);
-      return { start: formatDateInput(startOfMonth(lastMonth)), end: formatDateInput(endOfMonth(lastMonth)) };
-    },
-  },
-];
+  return null;
+}
 
 const pageBg = "#f5f7fb";
 const cardBg = "rgba(255, 255, 255, 0.94)";
@@ -287,7 +173,6 @@ const accent = "#2358d5";
 const green = "#158f63";
 const red = "#d9485f";
 const amber = "#c78322";
-const statusPalette = ["#1d5fd0", "#1f8f5f", "#c78322", "#d9485f", "#7c3aed", "#0f766e", "#ea580c", "#475569"];
 
 const styles = {
   shell: {
@@ -427,884 +312,6 @@ const styles = {
   fieldLabel: { fontSize: 11, fontWeight: 800, color: textSoft, letterSpacing: 0.42, textTransform: "uppercase" },
   sectionEyebrow: { fontSize: 11, color: accent, fontWeight: 800, letterSpacing: 0.6, textTransform: "uppercase" },
 };
-
-function formatTZS(value) {
-  return new Intl.NumberFormat("en-TZ", { style: "currency", currency: "TZS", maximumFractionDigits: 0 }).format(Number(value || 0));
-}
-
-function formatUSD(value) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(Number(value || 0));
-}
-
-function formatUsdFromTzs(value) {
-  return formatUSD(Number(value || 0) / USD_TO_TZS);
-}
-
-function formatMetaLeadSourceLabel(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized || normalized === "no_signal") return "No tracking signal";
-  if (normalized === "lead_action") return "Lead action";
-  if (normalized === "landing_page_view") return "Landing page view";
-  if (normalized === "link_click") return "Link click";
-  if (normalized === "mixed") return "Mixed sources";
-  return formatStatusLabel(normalized);
-}
-
-function formatInteger(value) {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Number(value || 0));
-}
-
-function parseLooseNumber(value) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  const raw = String(value || "").trim();
-  if (!raw) return 0;
-  const cleaned = raw.replace(/[^\d,.-]/g, "").replace(/,/g, "");
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function normalizeHeaderName(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function getMetaApiBase() {
-  const configuredBase = typeof import.meta !== "undefined" ? import.meta.env?.VITE_META_API_BASE : "";
-  if (configuredBase) return `${String(configuredBase).replace(/\/$/, "")}/api/meta`;
-  if (typeof window === "undefined") return `http://127.0.0.1:${META_API_PORT}/api/meta`;
-  return `${window.location.protocol}//${window.location.hostname}:${META_API_PORT}/api/meta`;
-}
-
-function getSharedApiBase() {
-  const configuredBase = typeof import.meta !== "undefined" ? import.meta.env?.VITE_SHARED_API_BASE : "";
-  if (configuredBase) return `${String(configuredBase).replace(/\/$/, "")}/api/state`;
-  if (typeof window === "undefined") return `http://127.0.0.1:${SHARED_API_PORT}/api/state`;
-  return `${window.location.protocol}//${window.location.hostname}:${SHARED_API_PORT}/api/state`;
-}
-
-function matchProductIdFromText(value, products) {
-  const rawValue = String(value || "").trim();
-  if (!rawValue) return "";
-
-  const normalizedValue = normalizeHeaderName(rawValue);
-  if (!normalizedValue) return "";
-
-  const valueTokens = normalizedValue.split(" ").filter(Boolean);
-
-  const byId = products.find((product) => product.id.toLowerCase() === rawValue.toLowerCase());
-  if (byId) return byId.id;
-
-  const byName = products.find((product) => normalizeHeaderName(product.name) === normalizedValue);
-  if (byName) return byName.id;
-
-  const partial = products.find((product) => {
-    const normalizedProductName = normalizeHeaderName(product.name);
-    return normalizedProductName.includes(normalizedValue) || normalizedValue.includes(normalizedProductName);
-  });
-  if (partial) return partial.id;
-
-  const scored = products
-    .map((product) => {
-      const productTokens = normalizeHeaderName(product.name).split(" ").filter(Boolean);
-      const overlap = valueTokens.filter((token) => productTokens.includes(token)).length;
-      const score = productTokens.length > 0 ? overlap / productTokens.length : 0;
-      return { id: product.id, score };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  return scored[0]?.score >= 0.5 ? scored[0].id : "";
-}
-
-function buildMappedMetaRows(rows, products, campaignMappings = {}) {
-  return (rows || []).map((row) => {
-    const suggestedProductId = matchProductIdFromText(`${row.campaignName} ${row.adsetName || ""}`, products);
-    const mappedProductId = campaignMappings[row.id] || suggestedProductId || "";
-    const product = products.find((entry) => entry.id === mappedProductId) || null;
-
-    return {
-      ...row,
-      suggestedProductId,
-      mappedProductId,
-      mappedProductName: product?.name || "",
-    };
-  });
-}
-
-function normalizeOrderStatus(value) {
-  const normalized = normalizeHeaderName(value);
-  if (!normalized) return "new-order";
-  return normalized.replace(/\s+/g, "-");
-}
-
-function normalizeProductOffers(offers) {
-  if (!Array.isArray(offers)) return [];
-
-  const offerMap = new Map();
-  offers.forEach((offer) => {
-    const minQty = Math.max(2, Math.round(Number(offer?.minQty || offer?.quantity || 0)));
-    const totalPrice = Math.max(0, parseLooseNumber(offer?.totalPrice ?? offer?.price ?? 0));
-    if (!minQty || !totalPrice) return;
-    offerMap.set(minQty, { minQty, totalPrice });
-  });
-
-  return Array.from(offerMap.values()).sort((a, b) => a.minQty - b.minQty);
-}
-
-function getProductPricing(product, quantity) {
-  const safeQty = Math.max(1, Number(quantity || 1));
-  const baseTotal = Number(product?.sellingPrice || 0) * safeQty;
-  const offers = normalizeProductOffers(product?.offers);
-  const matchedOffer = offers
-    .filter((offer) => safeQty >= offer.minQty)
-    .sort((a, b) => b.minQty - a.minQty)[0] || null;
-  const totalPrice = matchedOffer ? Number(matchedOffer.totalPrice || 0) : baseTotal;
-
-  return {
-    quantity: safeQty,
-    totalPrice,
-    unitPrice: safeQty > 0 ? totalPrice / safeQty : 0,
-    matchedOffer,
-    offers,
-  };
-}
-
-function getCustomerOrderTotalTzs(customer, product) {
-  const explicitTotal = Math.max(0, parseLooseNumber(customer?.orderTotalTzs));
-  if (explicitTotal > 0) return explicitTotal;
-  return getProductPricing(product, customer?.quantity).totalPrice;
-}
-
-function formatOffersSummary(offers) {
-  const normalized = normalizeProductOffers(offers);
-  if (!normalized.length) return "No offers";
-  return normalized.map((offer) => `${offer.minQty} pcs = ${formatTZS(offer.totalPrice)}`).join(" | ");
-}
-
-function sanitizeProductRecord(product) {
-  return {
-    ...product,
-    supplierName: String(product?.supplierName || ""),
-    supplierContact: String(product?.supplierContact || ""),
-    lifecycleStatus: String(product?.lifecycleStatus || "test"),
-    defectRate: Math.max(0, parseLooseNumber(product?.defectRate)),
-    notes: String(product?.notes || ""),
-    offers: normalizeProductOffers(product?.offers),
-  };
-}
-
-function sanitizeSituationData(value) {
-  const defaults = getDefaultSituationData();
-  return {
-    salaries: Array.isArray(value?.salaries)
-      ? value.salaries.map((entry, index) => ({
-          id: entry?.id || `salary-${index + 1}`,
-          name: String(entry?.name || ""),
-          role: String(entry?.role || ""),
-          amountTzs: Math.max(0, parseLooseNumber(entry?.amountTzs)),
-        }))
-      : defaults.salaries,
-    fixedCharges: Array.isArray(value?.fixedCharges)
-      ? value.fixedCharges.map((entry, index) => ({
-          id: entry?.id || `fixed-${index + 1}`,
-          label: String(entry?.label || ""),
-          amountTzs: Math.max(0, parseLooseNumber(entry?.amountTzs)),
-        }))
-      : defaults.fixedCharges,
-    adInputs:
-      value?.adInputs && typeof value.adInputs === "object"
-        ? Object.fromEntries(
-            Object.entries(value.adInputs).map(([productId, entry]) => [
-              String(productId),
-              {
-                averageLeadCostTzs: Math.max(0, parseLooseNumber(entry?.averageLeadCostTzs)),
-                incomingLeads: Math.max(0, Math.round(parseLooseNumber(entry?.incomingLeads))),
-              },
-            ])
-          )
-        : defaults.adInputs,
-    hourlyAdsSnapshots: Array.isArray(value?.hourlyAdsSnapshots)
-      ? value.hourlyAdsSnapshots
-          .map((entry, index) => ({
-            id: entry?.id || `hourly-ads-${index + 1}`,
-            bucket: String(entry?.bucket || ""),
-            totalSpendTzs: Math.max(0, parseLooseNumber(entry?.totalSpendTzs)),
-            capturedAt: entry?.capturedAt || null,
-            source: String(entry?.source || "tracking"),
-          }))
-          .sort((a, b) => String(b.bucket || "").localeCompare(String(a.bucket || "")))
-      : defaults.hourlyAdsSnapshots,
-    cumulativeAdsTotalTzs: Math.max(0, parseLooseNumber(value?.cumulativeAdsTotalTzs)),
-    cumulativeAdsByProduct:
-      value?.cumulativeAdsByProduct && typeof value.cumulativeAdsByProduct === "object"
-        ? Object.fromEntries(
-            Object.entries(value.cumulativeAdsByProduct).map(([productId, amount]) => [
-              String(productId),
-              Math.max(0, parseLooseNumber(amount)),
-            ])
-          )
-        : defaults.cumulativeAdsByProduct,
-    lastObservedAdsSpendTzs: Math.max(0, parseLooseNumber(value?.lastObservedAdsSpendTzs)),
-    lastObservedAdsByProduct:
-      value?.lastObservedAdsByProduct && typeof value.lastObservedAdsByProduct === "object"
-        ? Object.fromEntries(
-            Object.entries(value.lastObservedAdsByProduct).map(([productId, amount]) => [
-              String(productId),
-              Math.max(0, parseLooseNumber(amount)),
-            ])
-          )
-        : defaults.lastObservedAdsByProduct,
-    lastAdsAccumulatedAt: value?.lastAdsAccumulatedAt || null,
-    weeklyAdReviews: Array.isArray(value?.weeklyAdReviews)
-      ? value.weeklyAdReviews.map((entry, index) => ({
-          id: entry?.id || `weekly-${index + 1}`,
-          weekStart: entry?.weekStart || "",
-          productId: String(entry?.productId || ""),
-          launchedAds: entry?.launchedAds === "no" ? "no" : "yes",
-          averageCplTzs: Math.max(0, parseLooseNumber(entry?.averageCplTzs)),
-          notes: String(entry?.notes || ""),
-          createdAt: entry?.createdAt || null,
-        }))
-      : defaults.weeklyAdReviews,
-    weeklyReviewDraft: {
-      productId: String(value?.weeklyReviewDraft?.productId ?? defaults.weeklyReviewDraft.productId),
-      launchedAds: value?.weeklyReviewDraft?.launchedAds === "no" ? "no" : defaults.weeklyReviewDraft.launchedAds,
-      averageCplTzs: String(value?.weeklyReviewDraft?.averageCplTzs ?? defaults.weeklyReviewDraft.averageCplTzs),
-      notes: String(value?.weeklyReviewDraft?.notes ?? defaults.weeklyReviewDraft.notes),
-    },
-  };
-}
-
-const CONFIRMATION_STATUS_RULES = {
-  new: { bucket: "new" },
-  "new-order": { bucket: "new" },
-  confirmed: { bucket: "confirmed" },
-  cancelled: { bucket: "cancelled" },
-  cancel: { bucket: "cancelled" },
-  canceled: { bucket: "cancelled" },
-  unreached: { bucket: "pending" },
-  unreachable: { bucket: "pending" },
-  "not-reachable": { bucket: "pending" },
-  "not-joined": { bucket: "pending" },
-  "not-joinable": { bucket: "pending" },
-  "not-joignable": { bucket: "pending" },
-  "non-joignable": { bucket: "pending" },
-  "n-est-pas-joignable": { bucket: "pending" },
-  "unreachable-text-sent": { bucket: "pending" },
-  "no-reply": { bucket: "pending" },
-  "no-answer": { bucket: "pending" },
-  pending: { bucket: "pending" },
-  scheduled: { bucket: "pending" },
-  remind: { bucket: "pending" },
-  "client-to-revert": { bucket: "pending" },
-  reprogrammed: { bucket: "pending" },
-  "back-to-stock": { bucket: "cancelled" },
-  "out-of-stock": { bucket: "cancelled" },
-  "out-of-region": { bucket: "cancelled" },
-  wrong: { bucket: "cancelled" },
-  "wrong-number": { bucket: "cancelled" },
-  spam: { bucket: "cancelled" },
-  double: { bucket: "cancelled" },
-};
-
-const SHIPPING_STATUS_RULES = {
-  confirmed: { bucket: "to_prepare" },
-  "to-prepare": { bucket: "to_prepare" },
-  to_prepare: { bucket: "to_prepare" },
-  "in-preparation": { bucket: "to_prepare" },
-  prepared: { bucket: "to_prepare" },
-  "in-delivery": { bucket: "shipped" },
-  shipped: { bucket: "shipped" },
-  shipping: { bucket: "shipped" },
-  "sending-to-agent": { bucket: "shipped" },
-  received: { bucket: "delivered" },
-  paid: { bucket: "delivered" },
-  facture: { bucket: "delivered" },
-  factured: { bucket: "delivered" },
-  factur: { bucket: "delivered" },
-  delivered: { bucket: "delivered" },
-  "already-delivered": { bucket: "delivered" },
-  return: { bucket: "returned" },
-  returned: { bucket: "returned" },
-  returning: { bucket: "returned" },
-  rejected: { bucket: "returned" },
-  refunded: { bucket: "returned" },
-  damaged: { bucket: "returned" },
-  report: { bucket: "returned" },
-  reported: { bucket: "returned" },
-  cancelled: { bucket: "returned" },
-  canceled: { bucket: "returned" },
-  "return-from-agency": { bucket: "returned" },
-  "back-to-stock": { bucket: "returned" },
-  "returned-to-stock": { bucket: "returned" },
-  "return-to-stock": { bucket: "returned" },
-  "return-stock": { bucket: "returned" },
-  "return-request": { bucket: "returned" },
-  "validate-return": { bucket: "returned" },
-  "out-of-stock": { bucket: "returned" },
-  "on-hold": { bucket: "to_prepare" },
-};
-
-const DEFAULT_CONFIRMATION_STATUSES = [
-  "new-order",
-  "confirmed",
-  "pending",
-  "unreached",
-  "cancelled",
-  "out-of-stock",
-  "wrong",
-  "remind",
-  "client-to-revert",
-  "spam",
-  "double",
-];
-
-const DEFAULT_POST_CONFIRMATION_STATUSES = [
-  "to-prepare",
-  "shipped",
-  "delivered",
-  "return",
-  "returned",
-  "rejected",
-  "refunded",
-  "cancelled",
-  "out-of-stock",
-  "on-hold",
-  "return-from-agency",
-  "returning",
-  "validate-return",
-  "already-delivered",
-  "return-request",
-  "reprogrammed",
-  "unreachable",
-];
-
-function getEmptyExpeditionForm() {
-  return {
-    name: "",
-    source: "china",
-    sellingPrice: 0,
-    purchaseUnitPrice: 0,
-    totalQty: 0,
-    shippingTotal: 0,
-    otherCharges: 0,
-    delivery: 0,
-    estimatedArrivalDays: 3,
-    supplierName: "",
-    supplierContact: "",
-    lifecycleStatus: "test",
-    defectRate: 0,
-    notes: "",
-    offers: [],
-  };
-}
-
-function getEmptyCustomerForm(productId = "P001") {
-  return {
-    customerName: "",
-    phone: "",
-    city: "",
-    address: "",
-    productId,
-    quantity: 1,
-    orderDate: getTodayString(),
-    paymentMethod: "COD",
-    status: "new-order",
-    notes: "",
-    leadSource: "manual",
-    campaignName: "",
-    adsetName: "",
-    creativeName: "",
-    priority: "normal",
-    customerType: "new",
-    callAttempts: 0,
-    cancelReason: "",
-    unreachedReason: "",
-    carrierName: "",
-    trackingNumber: "",
-    expectedDeliveryDate: "",
-    returnReason: "",
-  };
-}
-
-function getDefaultSituationData() {
-  return {
-    salaries: [],
-    fixedCharges: [],
-    adInputs: {},
-    hourlyAdsSnapshots: [],
-    cumulativeAdsTotalTzs: 0,
-    cumulativeAdsByProduct: {},
-    lastObservedAdsSpendTzs: 0,
-    lastObservedAdsByProduct: {},
-    lastAdsAccumulatedAt: null,
-    weeklyAdReviews: [],
-    weeklyReviewDraft: {
-      productId: "",
-      launchedAds: "yes",
-      averageCplTzs: "",
-      notes: "",
-    },
-  };
-}
-
-function getDefaultMetaAdsState() {
-  const today = getTodayString();
-  return {
-    accessToken: "",
-    accountId: "",
-    dateStart: addDaysToDateString(today, -6),
-    dateEnd: today,
-    campaignMappings: {},
-    autoSync: true,
-    autoSyncIntervalMinutes: 3,
-    lastSyncAt: null,
-    lastSyncSummary: null,
-    lifetimeSpendTzs: 0,
-    lastLifetimeSpendSyncDate: null,
-    lifetimeSpendCapturedAt: null,
-    dailySpendSnapshots: [],
-  };
-}
-
-function sanitizeServiceForm(value) {
-  const totalLeads = Math.max(0, parseLooseNumber(value?.totalLeads));
-  const adSpendUsd = Math.max(0, parseLooseNumber(value?.adSpendUsd));
-  const explicitCplUsd = Math.max(0, parseLooseNumber(value?.cplUsd));
-
-  return {
-    totalLeads: totalLeads || 0,
-    confirmationRate: Math.max(0, parseLooseNumber(value?.confirmationRate)),
-    deliveryRate: Math.max(0, parseLooseNumber(value?.deliveryRate)),
-    sellingPriceTzs: Math.max(0, parseLooseNumber(value?.sellingPriceTzs)),
-    productCostTzs: Math.max(0, parseLooseNumber(value?.productCostTzs)),
-    cplUsd: explicitCplUsd > 0 ? explicitCplUsd : totalLeads > 0 ? adSpendUsd / totalLeads : 0,
-  };
-}
-
-function getDefaultServiceForm() {
-  return sanitizeServiceForm({
-    totalLeads: 150,
-    confirmationRate: 50,
-    deliveryRate: 50,
-    sellingPriceTzs: 39000,
-    productCostTzs: 15000,
-    cplUsd: 950 / 150,
-  });
-}
-
-function getDefaultImportMeta() {
-  return {
-    lastOrdersImportAt: null,
-    lastShippingImportAt: null,
-  };
-}
-
-function getDefaultCloudWorkspaceState() {
-  return {
-    products: [],
-    tracking: [],
-    customers: [],
-    serviceForm: getDefaultServiceForm(),
-    situationData: getDefaultSituationData(),
-    metaAdsState: getDefaultMetaAdsState(),
-    importMeta: getDefaultImportMeta(),
-  };
-}
-
-function sanitizeMetaAdsState(value) {
-  const defaults = getDefaultMetaAdsState();
-  return {
-    accessToken: String(value?.accessToken || defaults.accessToken),
-    accountId: String(value?.accountId || defaults.accountId),
-    dateStart: String(value?.dateStart || defaults.dateStart),
-    dateEnd: String(value?.dateEnd || defaults.dateEnd),
-    campaignMappings:
-      value?.campaignMappings && typeof value.campaignMappings === "object"
-        ? Object.fromEntries(
-            Object.entries(value.campaignMappings).map(([campaignId, productId]) => [String(campaignId), String(productId || "")])
-          )
-        : defaults.campaignMappings,
-    autoSync: value?.autoSync !== undefined ? Boolean(value.autoSync) : defaults.autoSync,
-    autoSyncIntervalMinutes: Math.max(1, Math.round(Number(value?.autoSyncIntervalMinutes || defaults.autoSyncIntervalMinutes))),
-    lastSyncAt: value?.lastSyncAt || null,
-    lifetimeSpendTzs: Math.max(0, parseLooseNumber(value?.lifetimeSpendTzs)),
-    lastLifetimeSpendSyncDate: value?.lastLifetimeSpendSyncDate || null,
-    lifetimeSpendCapturedAt: value?.lifetimeSpendCapturedAt || null,
-    dailySpendSnapshots: Array.isArray(value?.dailySpendSnapshots)
-      ? value.dailySpendSnapshots
-          .map((entry, index) => ({
-            id: entry?.id || `meta-daily-${index + 1}`,
-            bucket: String(entry?.bucket || ""),
-            totalSpendTzs: Math.max(0, parseLooseNumber(entry?.totalSpendTzs)),
-            newSpendTzs: Math.max(0, parseLooseNumber(entry?.newSpendTzs)),
-            capturedAt: entry?.capturedAt || null,
-            source: String(entry?.source || "meta_maximum"),
-          }))
-          .sort((a, b) => String(b.bucket || "").localeCompare(String(a.bucket || "")))
-      : defaults.dailySpendSnapshots,
-    lastSyncSummary:
-      value?.lastSyncSummary && typeof value.lastSyncSummary === "object"
-        ? {
-            since: String(value.lastSyncSummary.since || ""),
-            until: String(value.lastSyncSummary.until || ""),
-            matchedProducts: Math.max(0, Number(value.lastSyncSummary.matchedProducts || 0)),
-            matchedRows: Math.max(0, Number(value.lastSyncSummary.matchedRows || 0)),
-            totalSpendTzs: Math.max(0, parseLooseNumber(value.lastSyncSummary.totalSpendTzs)),
-            totalLeads: Math.max(0, Number(value.lastSyncSummary.totalLeads || 0)),
-            accountTotalSpendTzs: Math.max(0, parseLooseNumber(value.lastSyncSummary.accountTotalSpendTzs)),
-          }
-        : null,
-  };
-}
-
-const STATUS_COLOR_OVERRIDES = {
-  new: "#4f7cf3",
-  "new-order": "#4f7cf3",
-  pending: "#67e8f9",
-  unreached: "#d946ef",
-  unreachable: "#ef4444",
-  "unreachable-text-sent": "#65cfd0",
-  scheduled: "#fde68a",
-  remind: "#16a34a",
-  "client-to-revert": "#d946ef",
-  reprogrammed: "#8b0f6a",
-  confirmed: "#84cc16",
-  cancelled: "#ef4444",
-  canceled: "#ef4444",
-  "back-to-stock": "#f59e0b",
-  "out-of-stock": "#ea7a1f",
-  "out-of-region": "#fdba74",
-  wrong: "#f87171",
-  "wrong-number": "#f87171",
-  spam: "#111111",
-  double: "#111111",
-  "to-prepare": "#f59e0b",
-  "in-preparation": "#f59e0b",
-  prepared: "#a5b4fc",
-  shipped: "#24b26b",
-  shipping: "#24b26b",
-  "in-delivery": "#67e8f9",
-  "sending-to-agent": "#d8d59f",
-  received: "#3149b8",
-  paid: "#16a34a",
-  facture: "#84cc16",
-  factured: "#84cc16",
-  factur: "#84cc16",
-  delivered: "#3149b8",
-  "already-delivered": "#60d61a",
-  return: "#1395b2",
-  returned: "#1395b2",
-  returning: "#c21899",
-  rejected: "#ef4444",
-  refunded: "#d7d10d",
-  damaged: "#d1d5db",
-  report: "#f4e46e",
-  reported: "#f4e46e",
-  "return-from-agency": "#0f766e",
-  "return-stock": "#dfe9c5",
-  "return-request": "#ef4444",
-  "validate-return": "#41a1f1",
-  "on-hold": "#d9e234",
-};
-
-function formatStatusLabel(status) {
-  const key = normalizeOrderStatus(status);
-  const knownLabels = {
-    new: "New Order",
-    "new-order": "New Order",
-    confirmed: "Confirmed",
-    delivered: "Delivered",
-    cancelled: "Cancelled",
-    unreached: "Unreached",
-    "to-prepare": "To Prepare",
-    "on-hold": "On Hold",
-    refunded: "Refunded",
-    "out-of-stock": "Out Of Stock",
-    "client-to-revert": "Client To Revert",
-    "return-request": "Return Request",
-    "validate-return": "Validate Return",
-    "already-delivered": "Already Delivered",
-  };
-
-  if (knownLabels[key]) return knownLabels[key];
-
-  return key
-    .split("-")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function getConfirmationStatusRule(status) {
-  return CONFIRMATION_STATUS_RULES[normalizeOrderStatus(status)] || null;
-}
-
-function getShippingStatusRule(status) {
-  return SHIPPING_STATUS_RULES[normalizeOrderStatus(status)] || null;
-}
-
-function getConfirmationBucket(status) {
-  return getConfirmationStatusRule(status)?.bucket || "pending";
-}
-
-function getShippingBucket(status) {
-  return getShippingStatusRule(status)?.bucket || "to_prepare";
-}
-
-function getStatusSemantic(status) {
-  const normalized = normalizeHeaderName(String(status || "").replace(/-/g, " "));
-  if (!normalized) return "new";
-  if (/\b(delivered|livre|livree|livrees|received|completed|complete|success|done)\b/.test(normalized)) return "delivered";
-  if (/\b(cancelled|canceled|cancel|annule|annulation|rejected|reject|refused|refuse|failed|failure|returned|return|unresponsive|unreachable)\b/.test(normalized)) return "cancelled";
-  if (normalized.includes("no answer") || normalized.includes("not responding")) return "cancelled";
-  if (/\b(confirmed|confirm|validation|validated|approved|prepare|prepared|shipping|shipped|dispatch|dispatched|expedie|expedition|transit|courier|route|delivery|livraison)\b/.test(normalized)) return "confirmed";
-  if (/\b(new|pending|nouveau|lead|open|fresh)\b/.test(normalized)) return "new";
-  return "other";
-}
-
-function getStatusColor(status) {
-  const key = normalizeOrderStatus(status);
-  if (STATUS_COLOR_OVERRIDES[key]) return STATUS_COLOR_OVERRIDES[key];
-
-  const semantic = getStatusSemantic(status);
-  if (semantic === "delivered") return "#16a34a";
-  if (semantic === "confirmed") return "#f59e0b";
-  if (semantic === "cancelled") return "#dc2626";
-  if (semantic === "new") return "#64748b";
-
-  const hash = key.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return statusPalette[hash % statusPalette.length];
-}
-
-function getStatusBadgeStyle(status) {
-  const color = getStatusColor(status);
-  return {
-    ...styles.badge,
-    background: `${color}14`,
-    color,
-    border: `1px solid ${color}33`,
-    justifyContent: "center",
-    whiteSpace: "nowrap",
-  };
-}
-
-function excelDateToInput(value) {
-  if (value == null || value === "") return getTodayString();
-  if (typeof value === "number") {
-    const parsed = XLSX.SSF.parse_date_code(value);
-    if (!parsed) return getTodayString();
-    return formatDateInput(new Date(parsed.y, parsed.m - 1, parsed.d));
-  }
-
-  const raw = String(value).trim();
-  if (!raw) return getTodayString();
-  const isoMatch = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (isoMatch) {
-    return `${isoMatch[1]}-${String(isoMatch[2]).padStart(2, "0")}-${String(isoMatch[3]).padStart(2, "0")}`;
-  }
-
-  const frMatch = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
-  if (frMatch) {
-    return `${frMatch[3]}-${String(frMatch[2]).padStart(2, "0")}-${String(frMatch[1]).padStart(2, "0")}`;
-  }
-
-  const fallback = new Date(raw);
-  return Number.isNaN(fallback.getTime()) ? getTodayString() : formatDateInput(fallback);
-}
-
-function buildNextId(items, prefix) {
-  const maxId = items.reduce((max, item) => {
-    const match = String(item?.id || "").match(new RegExp(`^${prefix}(\\d+)$`));
-    return match ? Math.max(max, Number(match[1])) : max;
-  }, 0);
-
-  return `${prefix}${String(maxId + 1).padStart(3, "0")}`;
-}
-
-function buildHistoryEntry({ action, source = "system", details = "" }) {
-  return {
-    id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    at: new Date().toISOString(),
-    action: String(action || "updated"),
-    source: String(source || "system"),
-    details: String(details || ""),
-  };
-}
-
-function sanitizeHistoryEntries(history) {
-  if (!Array.isArray(history)) return [];
-  return history
-    .map((entry, index) => ({
-      id: entry?.id || `hist-${index + 1}`,
-      at: entry?.at || null,
-      action: String(entry?.action || "updated"),
-      source: String(entry?.source || "system"),
-      details: String(entry?.details || ""),
-    }))
-    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
-}
-
-function appendCustomerHistory(customer, entry) {
-  const history = sanitizeHistoryEntries(customer?.history);
-  return [entry, ...history].slice(0, 40);
-}
-
-function getWeekStartString(value) {
-  const date = parseDateInput(value) || new Date(value || Date.now());
-  if (!date || Number.isNaN(date.getTime())) return getTodayString();
-  return formatDateInput(startOfWeek(date));
-}
-
-function getWeekEndString(weekStartString) {
-  return addDaysToDateString(weekStartString, 6);
-}
-
-function getWeekLabel(weekStartString) {
-  const safeStart = weekStartString || getTodayString();
-  return `${safeStart} -> ${getWeekEndString(safeStart)}`;
-}
-
-function getDayBucket(value = Date.now()) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function hasMeaningfulWorkspaceData(snapshot = {}) {
-  return (
-    (Array.isArray(snapshot.products) && snapshot.products.length > 0) ||
-    (Array.isArray(snapshot.customers) && snapshot.customers.length > 0) ||
-    (Array.isArray(snapshot.tracking) && snapshot.tracking.length > 0)
-  );
-}
-
-function sanitizeCustomerRecord(customer) {
-  const separated = inferSeparatedStatuses(customer);
-  return {
-    ...customer,
-    quantity: Math.max(1, Number(customer?.quantity || 1)),
-    assignedTo: String(customer?.assignedTo || ""),
-    leadSource: String(customer?.leadSource || "manual"),
-    campaignName: String(customer?.campaignName || ""),
-    adsetName: String(customer?.adsetName || ""),
-    creativeName: String(customer?.creativeName || ""),
-    priority: String(customer?.priority || "normal"),
-    customerType: String(customer?.customerType || "new"),
-    callAttempts: Math.max(0, Math.round(Number(customer?.callAttempts || 0))),
-    cancelReason: String(customer?.cancelReason || ""),
-    unreachedReason: String(customer?.unreachedReason || ""),
-    returnReason: String(customer?.returnReason || ""),
-    carrierName: String(customer?.carrierName || ""),
-    trackingNumber: String(customer?.trackingNumber || ""),
-    expectedDeliveryDate: String(customer?.expectedDeliveryDate || ""),
-    actualDeliveryDate: String(customer?.actualDeliveryDate || ""),
-    history: sanitizeHistoryEntries(customer?.history),
-    confirmationStatus: separated.confirmationStatus,
-    shippingStatus: separated.shippingStatus,
-    status: separated.effectiveStatus,
-  };
-}
-
-function normalizePhoneValue(value) {
-  return String(value || "").replace(/\D+/g, "");
-}
-
-function inferSeparatedStatuses(customer) {
-  const rawStatus = normalizeOrderStatus(customer?.status || customer?.confirmationStatus || customer?.shippingStatus);
-  const explicitConfirmation = normalizeOrderStatus(customer?.confirmationStatus);
-  const explicitShipping = normalizeOrderStatus(customer?.shippingStatus);
-  const hasShippingImport = Boolean(customer?.lastShippingImportedAt);
-  const isKnownShipping = Boolean(getShippingStatusRule(rawStatus));
-  const isKnownConfirmation = Boolean(getConfirmationStatusRule(rawStatus));
-
-  let confirmationStatus = explicitConfirmation || "";
-  let shippingStatus = explicitShipping || "";
-
-  if (!confirmationStatus && !shippingStatus) {
-    if (isKnownShipping && !isKnownConfirmation) {
-      shippingStatus = rawStatus;
-      confirmationStatus = "confirmed";
-    } else if (isKnownShipping && hasShippingImport && rawStatus !== "confirmed") {
-      shippingStatus = rawStatus;
-      confirmationStatus = "confirmed";
-    } else {
-      confirmationStatus = rawStatus || "new";
-    }
-  }
-
-  if (!shippingStatus && hasShippingImport && rawStatus && isKnownShipping) {
-    shippingStatus = rawStatus;
-  }
-
-  if (!confirmationStatus && shippingStatus) {
-    confirmationStatus = "confirmed";
-  }
-
-  if (!confirmationStatus) confirmationStatus = "new";
-  if (confirmationStatus && !shippingStatus && isKnownShipping && confirmationStatus === "confirmed" && rawStatus !== "confirmed") {
-    shippingStatus = rawStatus;
-  }
-
-  return {
-    confirmationStatus,
-    shippingStatus,
-    effectiveStatus: shippingStatus || confirmationStatus,
-  };
-}
-
-function getCustomerConfirmationStatus(customer) {
-  return inferSeparatedStatuses(customer).confirmationStatus;
-}
-
-function getCustomerShippingStatus(customer) {
-  return inferSeparatedStatuses(customer).shippingStatus;
-}
-
-function getCustomerEffectiveStatus(customer) {
-  return inferSeparatedStatuses(customer).effectiveStatus;
-}
-
-function isConfirmationConfirmed(status) {
-  return getConfirmationBucket(status) === "confirmed";
-}
-
-function isConfirmationNew(status) {
-  return getConfirmationBucket(status) === "new";
-}
-
-function isConfirmationCancelled(status) {
-  return getConfirmationBucket(status) === "cancelled";
-}
-
-function isShippingDelivered(status) {
-  return getShippingBucket(status) === "delivered";
-}
-
-function isShippingInProgress(status) {
-  const bucket = getShippingBucket(status);
-  return bucket === "to_prepare" || bucket === "shipped";
-}
-
-function isShippingReturned(status) {
-  return getShippingBucket(status) === "returned";
-}
-
-function getUnitProductCostUSD(product) {
-  if (!product) return 0;
-  const qty = Number(product.totalQty || 0);
-  const purchaseUnitPrice = Number(product.purchaseUnitPrice || 0);
-  const shippingTotalUsd = Number(product.shippingTotal || 0) / USD_TO_TZS;
-  const otherChargesUsd = Number(product.otherCharges || 0) / USD_TO_TZS;
-  const totalImportCost = purchaseUnitPrice * qty + shippingTotalUsd + otherChargesUsd;
-  return qty > 0 ? totalImportCost / qty : 0;
-}
 
 function getDecisionStyle(decision) {
   if (["SCALE", "GOOD PRODUCT", "In Stock", "Arrived", "OK"].includes(decision)) {
@@ -1649,15 +656,22 @@ export default function App() {
   const lastSharedPayloadRef = useRef("");
   const latestSharedStateRef = useRef({});
   const queuedSharedSnapshotRef = useRef(null);
+  const initialBrowserSnapshotRef = useRef(null);
+  if (initialBrowserSnapshotRef.current === null) {
+    initialBrowserSnapshotRef.current = readLocalWorkspaceSnapshotFromStorage();
+  }
+  const initialBrowserSnapshot = initialBrowserSnapshotRef.current;
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1280 : window.innerWidth
   );
   const [activePage, setActivePage] = useState("dashboard");
   const [selectedService, setSelectedService] = useState("standard");
   const [selectedCountry, setSelectedCountry] = useState("tanzania");
-  const [serviceForm, setServiceForm] = useState(getDefaultServiceForm);
+  const [serviceForm, setServiceForm] = useState(() =>
+    sanitizeServiceForm(initialBrowserSnapshot?.serviceForm || getDefaultServiceForm())
+  );
   const [situationData, setSituationData] = useState(() => {
-    if (supabaseEnabled) return getDefaultSituationData();
+    if (supabaseEnabled) return sanitizeSituationData(initialBrowserSnapshot?.situationData || getDefaultSituationData());
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? sanitizeSituationData(JSON.parse(raw).situationData) : getDefaultSituationData();
@@ -1701,7 +715,7 @@ export default function App() {
   const [shippingImportNotice, setShippingImportNotice] = useState("");
   const [shippingImportDetails, setShippingImportDetails] = useState(null);
   const [importMeta, setImportMeta] = useState(() => {
-    if (supabaseEnabled) return getDefaultImportMeta();
+    if (supabaseEnabled) return initialBrowserSnapshot?.importMeta || getDefaultImportMeta();
     try {
       const raw = localStorage.getItem(IMPORT_META_KEY);
       return raw ? JSON.parse(raw) : getDefaultImportMeta();
@@ -1710,7 +724,7 @@ export default function App() {
     }
   });
   const [metaAdsState, setMetaAdsState] = useState(() => {
-    if (supabaseEnabled) return getDefaultMetaAdsState();
+    if (supabaseEnabled) return sanitizeMetaAdsState(initialBrowserSnapshot?.metaAdsState || getDefaultMetaAdsState());
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? sanitizeMetaAdsState(JSON.parse(raw).metaAdsState) : getDefaultMetaAdsState();
@@ -1742,6 +756,13 @@ export default function App() {
     updatedAt: null,
     notice: "Local workspace mode",
   });
+  const [cloudBackupState, setCloudBackupState] = useState({
+    loading: false,
+    restoringId: null,
+    available: true,
+    items: [],
+    notice: "",
+  });
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [customerListFilters, setCustomerListFilters] = useState({
     search: "",
@@ -1764,7 +785,7 @@ export default function App() {
   const [auditSearch, setAuditSearch] = useState("");
 
   const [products, setProducts] = useState(() => {
-    if (supabaseEnabled) return [];
+    if (supabaseEnabled) return Array.isArray(initialBrowserSnapshot?.products) ? initialBrowserSnapshot.products.map(sanitizeProductRecord) : [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? (JSON.parse(raw).products || initialProducts).map(sanitizeProductRecord) : initialProducts.map(sanitizeProductRecord);
@@ -1774,7 +795,7 @@ export default function App() {
   });
 
   const [tracking, setTracking] = useState(() => {
-    if (supabaseEnabled) return [];
+    if (supabaseEnabled) return Array.isArray(initialBrowserSnapshot?.tracking) ? initialBrowserSnapshot.tracking : [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? JSON.parse(raw).tracking || initialTracking : initialTracking;
@@ -1784,7 +805,7 @@ export default function App() {
   });
 
   const [customers, setCustomers] = useState(() => {
-    if (supabaseEnabled) return [];
+    if (supabaseEnabled) return Array.isArray(initialBrowserSnapshot?.customers) ? initialBrowserSnapshot.customers.map(sanitizeCustomerRecord) : [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? (JSON.parse(raw).customers || INITIAL_CUSTOMERS).map(sanitizeCustomerRecord) : INITIAL_CUSTOMERS;
@@ -1818,19 +839,30 @@ export default function App() {
     };
   }, [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking]);
 
+  const readBrowserBackupSnapshot = useCallback(() => readLocalWorkspaceSnapshotFromStorage(), []);
+
   const applySharedStateSnapshot = useCallback((snapshot = {}) => {
     const cloudDefaults = getDefaultCloudWorkspaceState();
-    const fallbackSnapshot = supabaseEnabled
-      ? cloudDefaults
-      : {
-          products: initialProducts.map(sanitizeProductRecord),
-          tracking: [...initialTracking],
-          customers: INITIAL_CUSTOMERS.map(sanitizeCustomerRecord),
-          serviceForm: getDefaultServiceForm(),
-          situationData: getDefaultSituationData(),
-          metaAdsState: getDefaultMetaAdsState(),
-          importMeta: getDefaultImportMeta(),
-        };
+    const localBaseSnapshot =
+      (hasMeaningfulWorkspaceData(latestSharedStateRef.current) && latestSharedStateRef.current) ||
+      readBrowserBackupSnapshot() ||
+      null;
+    const fallbackSnapshot = localBaseSnapshot
+      ? {
+          ...cloudDefaults,
+          ...localBaseSnapshot,
+        }
+      : supabaseEnabled
+        ? cloudDefaults
+        : {
+            products: initialProducts.map(sanitizeProductRecord),
+            tracking: [...initialTracking],
+            customers: INITIAL_CUSTOMERS.map(sanitizeCustomerRecord),
+            serviceForm: getDefaultServiceForm(),
+            situationData: getDefaultSituationData(),
+            metaAdsState: getDefaultMetaAdsState(),
+            importMeta: getDefaultImportMeta(),
+          };
     const normalizedSnapshot = {
       products: Array.isArray(snapshot.products) ? snapshot.products.map(sanitizeProductRecord) : fallbackSnapshot.products,
       tracking: Array.isArray(snapshot.tracking) ? snapshot.tracking : fallbackSnapshot.tracking,
@@ -1858,7 +890,7 @@ export default function App() {
         sharedHydratingRef.current = false;
       }, 0);
     }
-  }, []);
+  }, [readBrowserBackupSnapshot]);
 
   useEffect(() => {
     if (supabaseEnabled) return;
@@ -1957,11 +989,27 @@ export default function App() {
         if (cancelled) return;
         const remoteState = payload.state || {};
         const cloudMode = supabaseEnabled && cloudAuth.user;
+        const remoteHasData = hasMeaningfulWorkspaceData(remoteState);
+        const localSnapshot = latestSharedStateRef.current || {};
+        const localHasData = hasMeaningfulWorkspaceData(localSnapshot);
+        const browserBackupSnapshot = readBrowserBackupSnapshot();
+        const recoveredFromBrowserBackup = !remoteHasData && !localHasData && Boolean(browserBackupSnapshot);
+        const shouldKeepLocal = !remoteHasData && localHasData;
 
         if (cloudMode) {
-          applySharedStateSnapshot(remoteState);
+          if (remoteHasData) {
+            applySharedStateSnapshot(remoteState);
+            lastSharedPayloadRef.current = JSON.stringify(remoteState);
+          } else if (shouldKeepLocal) {
+            lastSharedPayloadRef.current = "";
+          } else if (browserBackupSnapshot) {
+            applySharedStateSnapshot(browserBackupSnapshot);
+            lastSharedPayloadRef.current = "";
+          } else {
+            applySharedStateSnapshot(remoteState);
+            lastSharedPayloadRef.current = JSON.stringify(remoteState);
+          }
           sharedVersionRef.current = Number(payload.version || 0);
-          lastSharedPayloadRef.current = JSON.stringify(remoteState);
           setSharedWorkspace({
             mode: "cloud",
             available: true,
@@ -1970,51 +1018,35 @@ export default function App() {
             initialized: true,
             version: Number(payload.version || 0),
             updatedAt: payload.updatedAt || null,
-            notice: "Cloud workspace connected",
+            notice: recoveredFromBrowserBackup
+              ? "Recovered cloud data from browser backup"
+              : shouldKeepLocal
+                ? "Cloud workspace was empty - keeping local data"
+                : "Cloud workspace connected",
           });
           return;
         }
 
-        const remoteHasData = hasMeaningfulWorkspaceData(remoteState);
         const remoteLooksFresh =
           !remoteHasData &&
           Number(payload.version || 0) <= 0 &&
           !payload.updatedAt;
-        const localSnapshot = latestSharedStateRef.current || {};
-        const localHasData = hasMeaningfulWorkspaceData(localSnapshot);
         let recoveredFromAutoBackup = false;
 
         if (!cloudMode && remoteLooksFresh && !localHasData) {
-          try {
-            const rawAutoBackup = localStorage.getItem(AUTO_BACKUP_KEY);
-            if (rawAutoBackup) {
-              const parsedAutoBackup = JSON.parse(rawAutoBackup);
-              const backupState = {
-                products: Array.isArray(parsedAutoBackup.products) ? parsedAutoBackup.products : [],
-                tracking: Array.isArray(parsedAutoBackup.tracking) ? parsedAutoBackup.tracking : [],
-                customers: Array.isArray(parsedAutoBackup.customers) ? parsedAutoBackup.customers : [],
-                serviceForm: parsedAutoBackup.serviceForm || null,
-                situationData: parsedAutoBackup.situationData || null,
-                metaAdsState: parsedAutoBackup.metaAdsState || null,
-                importMeta: parsedAutoBackup.importMeta || null,
-              };
-              if (hasMeaningfulWorkspaceData(backupState)) {
-                applySharedStateSnapshot(backupState);
-                recoveredFromAutoBackup = true;
-              }
-            }
-          } catch {
-            // ignore auto-backup recovery issue
+          if (browserBackupSnapshot) {
+            applySharedStateSnapshot(browserBackupSnapshot);
+            recoveredFromAutoBackup = true;
           }
         }
 
-        const shouldKeepLocal = remoteLooksFresh && localHasData;
+        const shouldKeepLocalShared = remoteLooksFresh && localHasData;
 
-        if (!shouldKeepLocal && !recoveredFromAutoBackup) {
+        if (!shouldKeepLocalShared && !recoveredFromAutoBackup) {
           applySharedStateSnapshot(remoteState);
         }
         sharedVersionRef.current = Number(payload.version || 0);
-        lastSharedPayloadRef.current = shouldKeepLocal || recoveredFromAutoBackup ? "" : JSON.stringify(remoteState);
+        lastSharedPayloadRef.current = shouldKeepLocalShared || recoveredFromAutoBackup ? "" : JSON.stringify(remoteState);
         setSharedWorkspace({
           mode: supabaseEnabled ? "cloud" : "shared",
           available: true,
@@ -2025,7 +1057,7 @@ export default function App() {
           updatedAt: payload.updatedAt || null,
           notice: recoveredFromAutoBackup
             ? "Recovered from browser auto backup"
-            : shouldKeepLocal
+            : shouldKeepLocalShared
               ? `${supabaseEnabled ? "Cloud" : "Shared"} workspace was empty - keeping local data`
               : `${supabaseEnabled ? "Cloud" : "Shared"} workspace connected`,
         });
@@ -2048,7 +1080,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [applySharedStateSnapshot, cloudAuth.ready, cloudAuth.user]);
+  }, [applySharedStateSnapshot, cloudAuth.ready, cloudAuth.user, readBrowserBackupSnapshot]);
 
   useEffect(() => {
     localStorage.setItem(IMPORT_META_KEY, JSON.stringify(importMeta));
@@ -2068,24 +1100,34 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const payload = {
+    const nextSnapshot = {
       products,
       tracking,
       customers,
       serviceForm,
       situationData,
       metaAdsState,
+      importMeta,
+    };
+    const nextSnapshotHasData = hasMeaningfulWorkspaceData(nextSnapshot);
+    const existingBrowserBackup = readLocalWorkspaceSnapshotFromStorage();
+    if (!nextSnapshotHasData && existingBrowserBackup) {
+      return;
+    }
+
+    const payload = {
+      ...nextSnapshot,
       exportedAt: new Date().toISOString(),
       version: 1,
     };
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ products, tracking, customers, serviceForm, situationData, metaAdsState }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSnapshot));
     localStorage.setItem(AUTO_BACKUP_KEY, JSON.stringify(payload));
 
     const now = new Date().toISOString();
     localStorage.setItem(AUTO_BACKUP_META_KEY, JSON.stringify({ lastAutoBackupAt: now }));
     setLastAutoBackupAt(now);
-  }, [products, tracking, customers, serviceForm, situationData, metaAdsState]);
+  }, [customers, importMeta, metaAdsState, products, readBrowserBackupSnapshot, serviceForm, situationData, tracking]);
 
   useEffect(() => {
     const bucket = getDayBucket(currentTime);
@@ -2180,7 +1222,7 @@ export default function App() {
             workspaceId: supabaseWorkspaceId,
             userId: cloudAuth.user.id,
           });
-          payload = { ok: true, version: saved.version, updatedAt: saved.updatedAt };
+          payload = { ok: true, version: saved.version, updatedAt: saved.updatedAt, backup: saved.backup || null };
         } else {
           const response = await fetch(getSharedApiBase(), {
             method: "POST",
@@ -2207,6 +1249,35 @@ export default function App() {
           updatedAt: payload.updatedAt || prev.updatedAt || null,
           notice: successNotice,
         }));
+        if (supabaseEnabled && payload.backup) {
+          setCloudBackupState((prev) => {
+            if (!payload.backup.available) {
+              return {
+                ...prev,
+                available: false,
+                notice: payload.backup.notice || "Run the latest Supabase schema to enable restore history.",
+              };
+            }
+
+            if (!payload.backup.saved || !payload.backup.entry) {
+              return payload.backup.notice
+                ? {
+                    ...prev,
+                    available: true,
+                    notice: payload.backup.notice,
+                  }
+                : prev;
+            }
+
+            const nextItems = [payload.backup.entry, ...prev.items.filter((item) => item.id !== payload.backup.entry.id)].slice(0, 8);
+            return {
+              ...prev,
+              available: true,
+              items: nextItems,
+              notice: "",
+            };
+          });
+        }
         return true;
       } catch (error) {
         lastSharedPayloadRef.current = "";
@@ -2259,8 +1330,12 @@ export default function App() {
           if (!cloudAuth.user) return;
 
           const payload = await loadCloudWorkspace(supabaseWorkspaceId);
+          const remoteState = payload.state || {};
           const remoteVersion = Number(payload.version || 0);
-          const remoteSerialized = JSON.stringify(payload.state || {});
+          const remoteSerialized = JSON.stringify(remoteState);
+          const localSnapshot = latestSharedStateRef.current || {};
+          const remoteHasData = hasMeaningfulWorkspaceData(remoteState);
+          const localHasData = hasMeaningfulWorkspaceData(localSnapshot);
 
           if (!cancelled) {
             setSharedWorkspace((prev) => ({
@@ -2276,12 +1351,22 @@ export default function App() {
             }));
           }
 
+          if (!remoteHasData && localHasData && !sharedSyncLockRef.current) {
+            lastSharedPayloadRef.current = "";
+            void persistSharedSnapshot(localSnapshot, {
+              progressNotice: "Restoring cloud workspace data...",
+              successNotice: "Cloud workspace restored",
+              failurePrefix: "Cloud workspace restore failed",
+            });
+            return;
+          }
+
           if (
             !sharedSyncLockRef.current &&
             (remoteVersion > Number(sharedVersionRef.current || 0) || remoteSerialized !== lastSharedPayloadRef.current)
           ) {
             if (cancelled) return;
-            applySharedStateSnapshot(payload.state || {});
+            applySharedStateSnapshot(remoteState);
             sharedVersionRef.current = remoteVersion;
             lastSharedPayloadRef.current = remoteSerialized;
             setSharedWorkspace((prev) => ({
@@ -2313,17 +1398,28 @@ export default function App() {
           }));
         }
 
-        if (remoteVersion > Number(sharedVersionRef.current || 0) && !sharedSyncLockRef.current) {
-          const response = await fetch(getSharedApiBase(), { headers: { Accept: "application/json" } });
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Unable to refresh shared workspace.");
-          if (cancelled) return;
-          applySharedStateSnapshot(payload.state || {});
-          sharedVersionRef.current = Number(payload.version || remoteVersion);
-          lastSharedPayloadRef.current = JSON.stringify(payload.state || {});
-          setSharedWorkspace((prev) => ({
-            ...prev,
-            mode: "shared",
+          if (remoteVersion > Number(sharedVersionRef.current || 0) && !sharedSyncLockRef.current) {
+            const response = await fetch(getSharedApiBase(), { headers: { Accept: "application/json" } });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Unable to refresh shared workspace.");
+            if (cancelled) return;
+            const remoteState = payload.state || {};
+            const localSnapshot = latestSharedStateRef.current || {};
+            if (!hasMeaningfulWorkspaceData(remoteState) && hasMeaningfulWorkspaceData(localSnapshot)) {
+              lastSharedPayloadRef.current = "";
+              void persistSharedSnapshot(localSnapshot, {
+                progressNotice: "Restoring shared workspace data...",
+                successNotice: "Shared workspace restored",
+                failurePrefix: "Shared workspace restore failed",
+              });
+              return;
+            }
+            applySharedStateSnapshot(remoteState);
+            sharedVersionRef.current = Number(payload.version || remoteVersion);
+            lastSharedPayloadRef.current = JSON.stringify(remoteState);
+            setSharedWorkspace((prev) => ({
+              ...prev,
+              mode: "shared",
             available: true,
             version: Number(payload.version || remoteVersion),
             updatedAt: payload.updatedAt || prev.updatedAt,
@@ -2347,21 +1443,154 @@ export default function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [applySharedStateSnapshot, cloudAuth.user]);
+  }, [applySharedStateSnapshot, cloudAuth.user, persistSharedSnapshot]);
+
+  const refreshCloudBackups = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!supabaseEnabled || !cloudAuth.user) {
+        setCloudBackupState({
+          loading: false,
+          restoringId: null,
+          available: true,
+          items: [],
+          notice: "",
+        });
+        return;
+      }
+
+      if (!silent) {
+        setCloudBackupState((prev) => ({
+          ...prev,
+          loading: true,
+          notice: prev.notice && !prev.available ? prev.notice : "",
+        }));
+      }
+
+      try {
+        const response = await listCloudWorkspaceBackups(supabaseWorkspaceId, 8);
+        setCloudBackupState((prev) => ({
+          ...prev,
+          loading: false,
+          available: response.available,
+          items: response.items || [],
+          notice: response.notice || "",
+        }));
+      } catch (error) {
+        setCloudBackupState((prev) => ({
+          ...prev,
+          loading: false,
+          available: false,
+          notice: error instanceof Error ? error.message : "Unable to load cloud restore history.",
+        }));
+      }
+    },
+    [cloudAuth.user]
+  );
+
+  const restoreCloudBackup = useCallback(
+    async (backupId) => {
+      if (!cloudAuth.user) return;
+      const targetBackup = cloudBackupState.items.find((item) => item.id === backupId);
+      const backupLabel = targetBackup?.created_at ? new Date(targetBackup.created_at).toLocaleString() : `#${backupId}`;
+      if (!window.confirm(`Restore the workspace from backup ${backupLabel}? Current live data will be replaced by that saved version.`)) {
+        return;
+      }
+
+      setCloudBackupState((prev) => ({
+        ...prev,
+        restoringId: backupId,
+        notice: "",
+      }));
+      setSharedWorkspace((prev) => ({
+        ...prev,
+        notice: "Restoring cloud backup...",
+        saving: true,
+      }));
+
+      try {
+        await restoreCloudWorkspaceBackup(backupId, {
+          workspaceId: supabaseWorkspaceId,
+          userId: cloudAuth.user.id,
+        });
+
+        const restoredWorkspace = await loadCloudWorkspace(supabaseWorkspaceId);
+        if (restoredWorkspace?.state) {
+          applySharedStateSnapshot(restoredWorkspace.state);
+          latestSharedStateRef.current = restoredWorkspace.state;
+          lastSharedPayloadRef.current = JSON.stringify(restoredWorkspace.state || {});
+          sharedVersionRef.current = Number(restoredWorkspace.version || sharedVersionRef.current || 0);
+        }
+
+        setSharedWorkspace((prev) => ({
+          ...prev,
+          saving: false,
+          initialized: true,
+          available: true,
+          mode: "cloud",
+          version: Number(restoredWorkspace?.version || prev.version || 0),
+          updatedAt: restoredWorkspace?.updatedAt || prev.updatedAt || null,
+          notice: "Cloud backup restored",
+        }));
+        await refreshCloudBackups({ silent: true });
+      } catch (error) {
+        setSharedWorkspace((prev) => ({
+          ...prev,
+          saving: false,
+          notice: `Cloud backup restore failed${error instanceof Error && error.message ? `: ${error.message}` : ""}`,
+        }));
+        setCloudBackupState((prev) => ({
+          ...prev,
+          notice: error instanceof Error ? error.message : "Unable to restore cloud backup.",
+        }));
+      } finally {
+        setCloudBackupState((prev) => ({
+          ...prev,
+          restoringId: null,
+        }));
+      }
+    },
+    [applySharedStateSnapshot, cloudAuth.user, cloudBackupState.items, refreshCloudBackups]
+  );
+
+  useEffect(() => {
+    if (!supabaseEnabled || !cloudAuth.user) {
+      setCloudBackupState({
+        loading: false,
+        restoringId: null,
+        available: true,
+        items: [],
+        notice: "",
+      });
+      return;
+    }
+
+    void refreshCloudBackups({ silent: false });
+  }, [cloudAuth.user, refreshCloudBackups]);
 
   useEffect(() => {
     if (!supabaseEnabled || !cloudAuth.user) return undefined;
 
     const unsubscribe = subscribeToCloudWorkspace(supabaseWorkspaceId, (payload) => {
+      const remoteState = payload?.state || {};
       const remoteVersion = Number(payload?.version || 0);
-      const remoteSerialized = JSON.stringify(payload?.state || {});
+      const remoteSerialized = JSON.stringify(remoteState);
       if (
         sharedSyncLockRef.current ||
         (remoteVersion <= Number(sharedVersionRef.current || 0) && remoteSerialized === lastSharedPayloadRef.current)
       ) {
         return;
       }
-      applySharedStateSnapshot(payload.state || {});
+      const localSnapshot = latestSharedStateRef.current || {};
+      if (!hasMeaningfulWorkspaceData(remoteState) && hasMeaningfulWorkspaceData(localSnapshot)) {
+        lastSharedPayloadRef.current = "";
+        void persistSharedSnapshot(localSnapshot, {
+          progressNotice: "Restoring cloud workspace data...",
+          successNotice: "Cloud workspace restored",
+          failurePrefix: "Cloud workspace restore failed",
+        });
+        return;
+      }
+      applySharedStateSnapshot(remoteState);
       sharedVersionRef.current = remoteVersion;
       lastSharedPayloadRef.current = remoteSerialized;
       setSharedWorkspace((prev) => ({
@@ -2377,7 +1606,7 @@ export default function App() {
     return () => {
       unsubscribe();
     };
-  }, [applySharedStateSnapshot, cloudAuth.user]);
+  }, [applySharedStateSnapshot, cloudAuth.user, persistSharedSnapshot]);
 
   const persistProductsSnapshot = useCallback(
     async (nextProducts, notice = "Cloud product catalog synced") => {
@@ -2423,6 +1652,8 @@ export default function App() {
           orderedUnits: 0,
           confirmed: 0,
           confirmedUnits: 0,
+          shipping: 0,
+          shippingUnits: 0,
           delivered: 0,
           deliveredUnits: 0,
           returned: 0,
@@ -2442,6 +1673,10 @@ export default function App() {
       if (isConfirmationConfirmed(confirmationStatus)) {
         acc[productId].confirmed += 1;
         acc[productId].confirmedUnits += quantity;
+      }
+      if (shippingStatus && isShippingInProgress(shippingStatus)) {
+        acc[productId].shipping += 1;
+        acc[productId].shippingUnits += quantity;
       }
       if (isShippingDelivered(shippingStatus)) {
         acc[productId].delivered += 1;
@@ -2470,6 +1705,8 @@ export default function App() {
           orderedUnits: 0,
           confirmed: 0,
           confirmedUnits: 0,
+          shipping: 0,
+          shippingUnits: 0,
           delivered: 0,
           deliveredUnits: 0,
           returned: 0,
@@ -2486,11 +1723,13 @@ export default function App() {
         });
 
         const deliveredUnits = Number(customerMetrics.deliveredUnits || 0);
+        const shippingUnits = Number(customerMetrics.shippingUnits || 0);
         const returnedUnits = Number(customerMetrics.returnedUnits || 0);
         const confirmedUnits = Number(customerMetrics.confirmedUnits || 0);
         const orderedUnits = Number(customerMetrics.orderedUnits || 0);
         const delivered = Number(customerMetrics.delivered || 0);
         const confirmed = Number(customerMetrics.confirmed || 0);
+        const shipping = Number(customerMetrics.shipping || 0);
         const orders = Number(customerMetrics.orders || 0);
         const revenue = Number(customerMetrics.revenue || 0);
         const unitProductCost = getUnitProductCostUSD(product);
@@ -2504,8 +1743,8 @@ export default function App() {
         const deliveryRate = confirmed > 0 ? delivered / confirmed : 0;
         const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
         const initialStock = Number(product.totalQty || 0);
-        const reservedStock = Math.max(confirmedUnits - deliveredUnits - returnedUnits, 0);
-        const currentStock = Math.max(initialStock - deliveredUnits, 0);
+        const reservedStock = Math.max(confirmedUnits - shippingUnits - deliveredUnits - returnedUnits, 0);
+        const currentStock = Math.max(initialStock - shippingUnits - deliveredUnits, 0);
         const availableStock = Math.max(currentStock - reservedStock, 0);
         const salesPerDay = deliveredUnits > 0 ? deliveredUnits / 30 : 0;
         const arrivalDays = Number(product.estimatedArrivalDays || 0);
@@ -2545,8 +1784,10 @@ export default function App() {
           orders,
           orderedUnits,
           confirmed,
+          shipping,
           delivered,
           confirmedUnits,
+          shippingUnits,
           deliveredUnits,
           returnedOrders: customerMetrics.returned,
           returnedUnits,
@@ -3357,14 +2598,26 @@ export default function App() {
 
   const deleteProduct = (productId) => {
     const nextProducts = products.filter((p) => p.id !== productId);
+    const nextTracking = tracking.filter((t) => t.productId !== productId);
+    const nextCustomers = customers.filter((c) => c.productId !== productId);
+
     setProducts(nextProducts);
-    latestSharedStateRef.current = {
+    setTracking(nextTracking);
+    setCustomers(nextCustomers);
+
+    const nextSnapshot = {
       ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
       products: nextProducts.map(sanitizeProductRecord),
+      tracking: nextTracking,
+      customers: nextCustomers.map(sanitizeCustomerRecord),
     };
-    void persistProductsSnapshot(nextProducts, "Cloud product deleted");
-    setTracking((prev) => prev.filter((t) => t.productId !== productId));
-    setCustomers((prev) => prev.filter((c) => c.productId !== productId));
+    latestSharedStateRef.current = nextSnapshot;
+    void persistSharedSnapshot(nextSnapshot, {
+      progressNotice: "Saving product deletion to cloud...",
+      successNotice: "Cloud product deleted",
+      failurePrefix: "Cloud product delete failed",
+    });
+
     if (editingProductId === productId) {
       setEditingProductId(null);
       setExpeditionForm(getEmptyExpeditionForm());
@@ -3580,7 +2833,6 @@ export default function App() {
             "etat confirmation",
             "status confirmation",
             "status de confirmation",
-            "delivery status",
           ]);
           const status = String(rawStatus || "").trim()
             ? normalizeOrderStatus(rawStatus)
@@ -3619,17 +2871,21 @@ export default function App() {
             const normalizedExistingStatus = normalizeOrderStatus(existing.confirmationStatus || existing.status);
             const statusChanged = normalizedExistingStatus !== status;
             const existingShippingStatus = normalizeOrderStatus(existing.shippingStatus);
-            const shippingStatusChanged = Boolean(shippingStatus) && existingShippingStatus !== shippingStatus;
+            const nextShippingStatus = ensureShippingStatusForConfirmed(
+              statusChanged ? status : existing.confirmationStatus || normalizedExistingStatus,
+              shippingStatus || existing.shippingStatus
+            );
+            const shippingStatusChanged = existingShippingStatus !== nextShippingStatus;
             const historyNotes = [];
             if (statusChanged) historyNotes.push(`Confirmation ${formatStatusLabel(normalizedExistingStatus)} -> ${formatStatusLabel(status)}`);
-            if (shippingStatusChanged) historyNotes.push(`Shipping ${formatStatusLabel(existingShippingStatus || "to-prepare")} -> ${formatStatusLabel(shippingStatus)}`);
+            if (shippingStatusChanged) historyNotes.push(`Shipping ${formatStatusLabel(existingShippingStatus || "to-prepare")} -> ${formatStatusLabel(nextShippingStatus)}`);
             if (orderTotalTzs) historyNotes.push(`Order value synced to ${formatTZS(orderTotalTzs)}`);
 
             nextCustomers[existingIndex] = sanitizeCustomerRecord({
               ...existing,
               status: statusChanged ? status : normalizedExistingStatus,
               confirmationStatus: statusChanged ? status : existing.confirmationStatus || normalizedExistingStatus,
-              shippingStatus: shippingStatusChanged ? shippingStatus : existing.shippingStatus || "",
+              shippingStatus: nextShippingStatus,
               paymentMethod: paymentMethod || existing.paymentMethod,
               city: city || existing.city,
               address: address || existing.address,
@@ -3668,7 +2924,7 @@ export default function App() {
             paymentMethod,
             status,
             confirmationStatus: status,
-            shippingStatus,
+            shippingStatus: ensureShippingStatusForConfirmed(status, shippingStatus),
             orderTotalTzs,
             notes,
             sourceOrderId: sourceOrderId || null,
@@ -3910,7 +3166,7 @@ export default function App() {
       paymentMethod: customerForm.paymentMethod,
       status: customerForm.status,
       confirmationStatus: customerForm.status,
-      shippingStatus: "",
+      shippingStatus: ensureShippingStatusForConfirmed(customerForm.status, ""),
       orderTotalTzs: customerFormPricing.totalPrice,
       notes: customerForm.notes.trim(),
       leadSource: customerForm.leadSource,
@@ -3964,6 +3220,7 @@ export default function App() {
               ...c,
               status: nextStatus,
               confirmationStatus: nextStatus,
+              shippingStatus: ensureShippingStatusForConfirmed(nextStatus, c.shippingStatus),
               history: appendCustomerHistory(
                 c,
                 buildHistoryEntry({
@@ -4035,6 +3292,7 @@ export default function App() {
               ...customer,
               status: bulkCustomerStatus,
               confirmationStatus: bulkCustomerStatus,
+              shippingStatus: ensureShippingStatusForConfirmed(bulkCustomerStatus, customer.shippingStatus),
               history: appendCustomerHistory(
                 customer,
                 buildHistoryEntry({
@@ -4567,17 +3825,10 @@ export default function App() {
 
     const productEconomics = products
       .map((product) => {
-      const productStats = productDashboardMap[product.id] || {};
       const adInput = situationData.adInputs?.[product.id] || {};
       const hasManualAdInput = Object.prototype.hasOwnProperty.call(situationData.adInputs || {}, product.id);
-      const averageLeadCostTzs =
-        hasManualAdInput
-          ? Number(adInput.averageLeadCostTzs || 0)
-          : Number(productStats.costPerLead || 0);
-      const incomingLeads =
-        hasManualAdInput
-          ? Number(adInput.incomingLeads || 0)
-          : Number(productStats.orders || 0);
+      const averageLeadCostTzs = hasManualAdInput ? Number(adInput.averageLeadCostTzs || 0) : 0;
+      const incomingLeads = hasManualAdInput ? Number(adInput.incomingLeads || 0) : 0;
       const revenueTzs = Number(product.sellingPrice || 0) * Number(product.totalQty || 0);
       const stockCostTzs =
         (Number(product.purchaseUnitPrice || 0) * Number(product.totalQty || 0) * USD_TO_TZS) +
@@ -4587,12 +3838,7 @@ export default function App() {
       const fixedChargesProductTzs = stockCostTzs + productFixedChargeBonusTzs;
       const currentAdsCostTzs = averageLeadCostTzs * incomingLeads;
       const maxAdsCostTzs = Math.max(revenueTzs - fixedChargesProductTzs, 0);
-      const adsInputSourceLabel =
-        hasManualAdInput
-          ? "Manual ads input"
-          : Number(productStats.costPerLead || 0) > 0 || Number(productStats.orders || 0) > 0
-            ? "Tracking fallback"
-            : "No ads input yet";
+      const adsInputSourceLabel = hasManualAdInput ? "Manual ads input" : "No ads input yet";
       const revenuePercent = revenueTzs > 0 ? 100 : 0;
       const marginOnVariableCostTzs = revenueTzs - currentAdsCostTzs;
       const tmcvPercent = revenueTzs > 0 ? (marginOnVariableCostTzs / revenueTzs) * 100 : 0;
@@ -4653,7 +3899,7 @@ export default function App() {
       configuredAdsUsedTzs,
       configuredAverageLeadCostTzs,
     };
-  }, [liveAutomationSummary.localDeliveryCostTzs, productDashboardMap, products, situationData]);
+  }, [liveAutomationSummary.localDeliveryCostTzs, products, situationData]);
 
   const weeklyProductProfitRows = useMemo(() => {
     const grouped = {};
@@ -4958,7 +4204,7 @@ export default function App() {
         const adInput = situationData.adInputs?.[product.id] || {};
         const manualAdsUsedTzs = Number(adInput.averageLeadCostTzs || 0) * Number(adInput.incomingLeads || 0);
         const liveObservedAdsTzs = Number(product.spend || 0);
-        const cumulativeAdsTzs = Number(situationData.cumulativeAdsByProduct?.[product.id] || 0);
+        const cumulativeAdsTzs = manualAdsUsedTzs;
         const deliveredLogisticsTzs = Number(product.revenue || 0) - Number(product.profit || 0) - liveObservedAdsTzs;
         const cumulativeProfitTzs = Number(product.revenue || 0) - cumulativeAdsTzs - deliveredLogisticsTzs;
         const fixedProductChargesTzs =
@@ -4981,7 +4227,7 @@ export default function App() {
         };
       })
       .sort((a, b) => Number(b.cumulativeProfitTzs || 0) - Number(a.cumulativeProfitTzs || 0));
-  }, [productDashboard, situationData.adInputs, situationData.cumulativeAdsByProduct]);
+  }, [productDashboard, situationData.adInputs]);
 
   const auditRows = useMemo(() => {
     return customers
@@ -5571,144 +4817,26 @@ export default function App() {
     [productDetailsRows, productDetailsFilters.rowLimit]
   );
 
-  if (supabaseEnabled && !cloudAuth.ready) {
-    return (
-      <div style={styles.shell}>
-        <div
-          style={{
-            minHeight: "100vh",
-            display: "grid",
-            placeItems: "center",
-            padding: isCompact ? 18 : 32,
-            background:
-              "radial-gradient(circle at top left, rgba(35,88,213,0.12), transparent 32%), radial-gradient(circle at top right, rgba(31,143,95,0.10), transparent 28%), linear-gradient(180deg, #f6f8fc 0%, #eef3fb 100%)",
-          }}
-        >
-          <div style={{ ...styles.card, width: "100%", maxWidth: 560, textAlign: "center", padding: 28 }}>
-            <div style={styles.sectionEyebrow}>Cloud access</div>
-            <div style={{ marginTop: 10, fontSize: 28, fontWeight: 900 }}>Opening your workspace</div>
-            <div style={{ color: textSoft, marginTop: 10, lineHeight: 1.6 }}>
-              Checking your session and preparing the live data feed.
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (supabaseEnabled && !cloudAuth.user) {
-    return (
-      <div style={styles.shell}>
-        <div
-          style={{
-            minHeight: "100vh",
-            display: "grid",
-            placeItems: "center",
-            padding: isCompact ? 18 : 32,
-            background:
-              "radial-gradient(circle at top left, rgba(35,88,213,0.12), transparent 32%), radial-gradient(circle at top right, rgba(31,143,95,0.10), transparent 28%), linear-gradient(180deg, #f6f8fc 0%, #eef3fb 100%)",
-          }}
-        >
-          <div
-            style={{
-              width: "100%",
-              maxWidth: 1100,
-              display: "grid",
-              gridTemplateColumns: responsiveColumns("minmax(0, 1.05fr) minmax(360px, 0.95fr)", "1fr", "1fr"),
-              gap: 20,
-              alignItems: "stretch",
-            }}
-          >
-            <div style={{ ...styles.card, padding: isCompact ? 24 : 34, display: "grid", alignContent: "center" }}>
-              <div style={styles.sectionEyebrow}>Private cloud workspace</div>
-              <div style={{ fontSize: isCompact ? 34 : 48, fontWeight: 900, lineHeight: 1.02, marginTop: 10, maxWidth: 580 }}>
-                Tanzania Ecom Tracker
-              </div>
-              <div style={{ color: textSoft, marginTop: 14, lineHeight: 1.7, maxWidth: 620, fontSize: 16 }}>
-                Connect with your email to open the live workspace. Only authenticated users can see products, orders, metrics and all business actions.
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "1fr 1fr", "1fr"),
-                  gap: 12,
-                  marginTop: 24,
-                }}
-              >
-                <MiniStat label="Live collaboration" value="Shared" tone="blue" sub="You and your cofounder see the same workspace" />
-                <MiniStat label="Auto save" value="Always on" tone="green" sub="Each change is saved automatically" />
-                <MiniStat label="Access" value="Protected" tone="amber" sub="Login required before opening the app" />
-              </div>
-            </div>
-
-            <div style={{ ...styles.card, padding: isCompact ? 22 : 30, display: "grid", alignContent: "center" }}>
-              <div style={styles.sectionEyebrow}>Cloud access</div>
-              <div style={{ fontSize: 28, fontWeight: 900, marginTop: 10 }}>Sign in to open the live app</div>
-              <div style={{ color: textSoft, marginTop: 8, lineHeight: 1.6 }}>
-                {cloudAuth.notice}
-              </div>
-              <div style={{ display: "grid", gap: 12, marginTop: 22 }}>
-                <input
-                  style={styles.input}
-                  type="email"
-                  placeholder="Email"
-                  value={cloudAuth.email}
-                  onChange={(e) => setCloudAuth((prev) => ({ ...prev, email: e.target.value }))}
-                />
-                <input
-                  style={styles.input}
-                  type="password"
-                  placeholder="Password"
-                  value={cloudAuth.password}
-                  onChange={(e) => setCloudAuth((prev) => ({ ...prev, password: e.target.value }))}
-                />
-                <select
-                  style={styles.input}
-                  value={cloudAuth.mode}
-                  onChange={(e) => setCloudAuth((prev) => ({ ...prev, mode: e.target.value }))}
-                >
-                  <option value="signin">Sign in</option>
-                  <option value="signup">Create access</option>
-                </select>
-                <button style={{ ...styles.btnPrimary, minHeight: 56 }} onClick={submitCloudAuth} disabled={cloudAuth.loading}>
-                  {cloudAuth.loading ? "Connecting..." : cloudAuth.mode === "signup" ? "Create cloud access" : "Open cloud workspace"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      );
-    }
-
-  if (supabaseEnabled && cloudAuth.user && (!sharedWorkspace.initialized || sharedWorkspace.loading)) {
-    return (
-      <div style={styles.shell}>
-        <div
-          style={{
-            minHeight: "100vh",
-            display: "grid",
-            placeItems: "center",
-            padding: isCompact ? 18 : 32,
-            background:
-              "radial-gradient(circle at top left, rgba(35,88,213,0.12), transparent 32%), radial-gradient(circle at top right, rgba(31,143,95,0.10), transparent 28%), linear-gradient(180deg, #f6f8fc 0%, #eef3fb 100%)",
-          }}
-        >
-          <div style={{ ...styles.card, width: "100%", maxWidth: 620, textAlign: "center", padding: 28 }}>
-            <div style={styles.sectionEyebrow}>Cloud workspace</div>
-            <div style={{ marginTop: 10, fontSize: 28, fontWeight: 900 }}>Syncing live data</div>
-            <div style={{ color: textSoft, marginTop: 10, lineHeight: 1.6 }}>
-              The app is loading the latest shared data from the cloud so every browser sees the same workspace.
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const showCloudLoginGate = supabaseEnabled && cloudAuth.ready && !cloudAuth.user;
+  const showWorkspaceSyncNotice =
+    Boolean(sharedWorkspace.notice) &&
+    /(failed|unavailable|offline|delayed|error)/i.test(sharedWorkspace.notice);
+  const showCloudAuthNotice =
+    Boolean(cloudAuth.notice) &&
+    /(failed|error|unable|invalid|denied|required)/i.test(cloudAuth.notice);
 
   return (
     <div style={styles.shell}>
-      <div style={{ ...styles.layout, gridTemplateColumns: isCompact ? "1fr" : "260px 1fr" }}>
+      <div
+        style={{
+          ...styles.layout,
+          gridTemplateColumns: isCompact ? "1fr" : "260px 1fr",
+          filter: showCloudLoginGate ? "blur(10px)" : "none",
+          pointerEvents: showCloudLoginGate ? "none" : "auto",
+          userSelect: showCloudLoginGate ? "none" : "auto",
+          transition: "filter 160ms ease",
+        }}
+      >
         <aside style={{ ...styles.sidebar, borderRight: isCompact ? "none" : `1px solid ${cardBorder}`, borderBottom: isCompact ? `1px solid ${cardBorder}` : "none" }}>
           <div style={{ ...styles.brandPanel, marginBottom: 28 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -5797,16 +4925,20 @@ export default function App() {
                 <div style={{ color: textSoft, marginTop: 6, fontSize: 13 }}>
                   Last shipping import: {shippingImportReminder.lastShippingImportLabel}
                 </div>
-                <div style={{ color: textSoft, marginTop: 6, fontSize: 13 }}>
-                  Workspace sync: {sharedWorkspace.notice}{sharedWorkspace.updatedAt ? ` | ${new Date(sharedWorkspace.updatedAt).toLocaleString()}` : ""}
-                </div>
+                {showWorkspaceSyncNotice ? (
+                  <div style={{ color: textSoft, marginTop: 6, fontSize: 13 }}>
+                    Workspace sync: {sharedWorkspace.notice}{sharedWorkspace.updatedAt ? ` | ${new Date(sharedWorkspace.updatedAt).toLocaleString()}` : ""}
+                  </div>
+                ) : null}
                 {supabaseEnabled ? (
                   <div style={{ ...styles.softStat, marginTop: 16, background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,248,255,0.9))" }}>
                     <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: accent }}>Cloud access</div>
                     <div style={{ marginTop: 8, fontWeight: 800, fontSize: 18 }}>
                       {cloudAuth.user ? cloudAuth.user.email || "Authenticated user" : "Sign in to share the live app"}
                     </div>
-                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.5 }}>{cloudAuth.notice}</div>
+                    {showCloudAuthNotice ? (
+                      <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.5 }}>{cloudAuth.notice}</div>
+                    ) : null}
                     {!cloudAuth.user ? (
                       <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
                         <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr 120px", "1fr 1fr", "1fr"), gap: 10 }}>
@@ -5838,13 +4970,71 @@ export default function App() {
                         </button>
                       </div>
                     ) : (
-                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 160px", "1fr", "1fr"), gap: 10, marginTop: 14 }}>
-                        <div style={{ ...styles.badge, justifyContent: "flex-start", padding: "12px 14px", height: "100%", background: "rgba(31,143,95,0.1)", color: green, border: "1px solid rgba(31,143,95,0.16)" }}>
-                          Workspace: {supabaseWorkspaceId}
+                      <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 160px", "1fr", "1fr"), gap: 10 }}>
+                          <div style={{ ...styles.badge, justifyContent: "flex-start", padding: "12px 14px", height: "100%", background: "rgba(31,143,95,0.1)", color: green, border: "1px solid rgba(31,143,95,0.16)" }}>
+                            Workspace: {supabaseWorkspaceId}
+                          </div>
+                          <button style={styles.btnSecondary} onClick={logoutCloudAuth}>
+                            Sign out
+                          </button>
                         </div>
-                        <button style={styles.btnSecondary} onClick={logoutCloudAuth}>
-                          Sign out
-                        </button>
+                        <div style={{ ...styles.card, padding: 14, borderRadius: 16, boxShadow: "none", background: "linear-gradient(180deg, rgba(246,249,255,0.96), rgba(255,255,255,0.98))" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: accent }}>Cloud restore points</div>
+                              <div style={{ marginTop: 6, fontWeight: 800, fontSize: 16 }}>
+                                {cloudBackupState.available ? `${cloudBackupState.items.length} recent backup${cloudBackupState.items.length > 1 ? "s" : ""}` : "Restore history not enabled yet"}
+                              </div>
+                            </div>
+                            <button style={styles.btnSecondary} onClick={() => void refreshCloudBackups()} disabled={cloudBackupState.loading || Boolean(cloudBackupState.restoringId)}>
+                              {cloudBackupState.loading ? "Loading..." : "Refresh backups"}
+                            </button>
+                          </div>
+                          {cloudBackupState.notice ? (
+                            <div style={{ color: cloudBackupState.available ? textSoft : amber, marginTop: 10, lineHeight: 1.5 }}>{cloudBackupState.notice}</div>
+                          ) : null}
+                          {cloudBackupState.available && cloudBackupState.items.length ? (
+                            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                              {cloudBackupState.items.map((backup) => {
+                                const summary = backup.summary || {};
+                                return (
+                                  <div
+                                    key={backup.id}
+                                    style={{
+                                      display: "grid",
+                                      gridTemplateColumns: responsiveColumns("minmax(0, 1fr) 150px", "1fr", "1fr"),
+                                      gap: 10,
+                                      alignItems: "center",
+                                      padding: "12px 14px",
+                                      borderRadius: 14,
+                                      border: `1px solid ${cardBorder}`,
+                                      background: "rgba(255,255,255,0.92)",
+                                    }}
+                                  >
+                                    <div style={{ minWidth: 0 }}>
+                                      <div style={{ fontWeight: 800 }}>
+                                        {backup.created_at ? new Date(backup.created_at).toLocaleString() : `Backup #${backup.id}`}
+                                      </div>
+                                      <div style={{ color: textSoft, marginTop: 4, fontSize: 13, lineHeight: 1.5 }}>
+                                        Reason: {backup.reason || "autosave"} | Version {formatInteger(backup.workspace_version || 0)} | {formatInteger(summary.products || 0)} products | {formatInteger(summary.customers || 0)} orders | {formatInteger(summary.tracking || 0)} tracking rows
+                                      </div>
+                                    </div>
+                                    <button
+                                      style={styles.btnSecondary}
+                                      onClick={() => void restoreCloudBackup(backup.id)}
+                                      disabled={cloudBackupState.loading || cloudBackupState.restoringId === backup.id}
+                                    >
+                                      {cloudBackupState.restoringId === backup.id ? "Restoring..." : "Restore"}
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : cloudBackupState.available && !cloudBackupState.loading ? (
+                            <div style={{ color: textSoft, marginTop: 12 }}>No restore point saved yet. The next cloud save will create the first one automatically.</div>
+                          ) : null}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -8713,7 +7903,9 @@ export default function App() {
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.revenue)}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>
                             <div style={{ fontWeight: 800 }}>{formatUsdFromTzs(row.cumulativeAdsTzs)}</div>
-                            <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>Live now {formatUsdFromTzs(row.liveObservedAdsTzs)}</div>
+                            <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>
+                              {Number(row.cumulativeAdsTzs || 0) > 0 ? "Manual ads input" : "No ads input yet"}
+                            </div>
                           </td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, color: Number(row.cumulativeProfitTzs || 0) >= 0 ? green : red, fontWeight: 800 }}>
                             <div>{formatUsdFromTzs(row.cumulativeProfitTzs)}</div>
@@ -9105,6 +8297,55 @@ export default function App() {
           </div>
         </main>
       </div>
+      {showCloudLoginGate ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 80,
+            display: "grid",
+            placeItems: "center",
+            padding: isCompact ? 18 : 32,
+            background: "rgba(240, 246, 255, 0.38)",
+            backdropFilter: "blur(14px)",
+          }}
+        >
+          <div style={{ ...styles.card, width: "100%", maxWidth: 520, padding: isCompact ? 22 : 28 }}>
+            <div style={styles.sectionEyebrow}>Cloud access</div>
+            <div style={{ fontSize: 30, fontWeight: 900, marginTop: 10 }}>Sign in to continue</div>
+            <div style={{ color: textSoft, marginTop: 8, lineHeight: 1.6 }}>
+              {showCloudAuthNotice ? cloudAuth.notice : "Use your email to open the live shared workspace."}
+            </div>
+            <div style={{ display: "grid", gap: 12, marginTop: 22 }}>
+              <input
+                style={styles.input}
+                type="email"
+                placeholder="Email"
+                value={cloudAuth.email}
+                onChange={(e) => setCloudAuth((prev) => ({ ...prev, email: e.target.value }))}
+              />
+              <input
+                style={styles.input}
+                type="password"
+                placeholder="Password"
+                value={cloudAuth.password}
+                onChange={(e) => setCloudAuth((prev) => ({ ...prev, password: e.target.value }))}
+              />
+              <select
+                style={styles.input}
+                value={cloudAuth.mode}
+                onChange={(e) => setCloudAuth((prev) => ({ ...prev, mode: e.target.value }))}
+              >
+                <option value="signin">Sign in</option>
+                <option value="signup">Create access</option>
+              </select>
+              <button style={{ ...styles.btnPrimary, minHeight: 56 }} onClick={submitCloudAuth} disabled={cloudAuth.loading}>
+                {cloudAuth.loading ? "Connecting..." : cloudAuth.mode === "signup" ? "Create cloud access" : "Open cloud workspace"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
