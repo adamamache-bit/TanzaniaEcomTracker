@@ -434,6 +434,40 @@ app.post("/api/meta/spend-total", async (req, res) => {
   }
 });
 
+app.post("/api/meta/spend-daily", async (req, res) => {
+  try {
+    const accessToken = String(req.body?.accessToken || "").trim();
+    const accountId = ensureAccountId(req.body?.accountId);
+    const date = String(req.body?.date || "").trim();
+
+    if (!accessToken || !accountId || !date) {
+      return res.status(400).json({ ok: false, error: "Access token, account and date are required." });
+    }
+
+    const rows = await fetchMetaCollection(`/${accountId}/insights`, {
+      access_token: accessToken,
+      fields: "spend",
+      time_range: JSON.stringify({ since: date, until: date }),
+      limit: "5",
+    });
+
+    const totalSpend = rows.reduce((sum, row) => sum + toNumber(row?.spend), 0);
+
+    return res.json({
+      ok: true,
+      spend: totalSpend,
+      accountId,
+      date,
+      capturedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to load Meta daily spend.",
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Meta API bridge listening on http://127.0.0.1:${PORT}`);
 });
