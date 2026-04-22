@@ -1,6 +1,19 @@
 import { supabase, supabaseEnabled, supabaseWorkspaceId } from "./supabaseClient";
 import { hasMeaningfulWorkspaceData } from "./appLogic";
 
+function isWorkspaceBackupsTableMissing(error) {
+  const message = String(error?.message || error?.details || error?.hint || "").toLowerCase();
+  return error?.code === "42P01" || (message.includes("workspace_backups") && (message.includes("does not exist") || message.includes("not found")));
+}
+
+function buildWorkspaceBackupSummary(state = {}) {
+  return {
+    products: Array.isArray(state?.products) ? state.products.length : 0,
+    tracking: Array.isArray(state?.tracking) ? state.tracking.length : 0,
+    customers: Array.isArray(state?.customers) ? state.customers.length : 0,
+  };
+}
+
 async function ensureCloudWorkspaceMembership(workspaceId = supabaseWorkspaceId) {
   if (!supabaseEnabled || !supabase) throw new Error("Supabase is not configured.");
 
@@ -109,7 +122,141 @@ export async function loadCloudWorkspace(workspaceId = supabaseWorkspaceId) {
   };
 }
 
-export async function saveCloudWorkspace(state, { workspaceId = supabaseWorkspaceId, userId = null } = {}) {
+export async function listCloudWorkspaceBackups(workspaceId = supabaseWorkspaceId, limit = 12) {
+  if (!supabaseEnabled || !supabase) throw new Error("Supabase is not configured.");
+  await ensureCloudWorkspaceMembership(workspaceId);
+
+  const { data, error } = await supabase
+    .from("workspace_backups")
+    .select("id,workspace_id,workspace_version,created_at,created_by,reason,summary")
+    .eq("workspace_id", workspaceId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    if (isWorkspaceBackupsTableMissing(error)) {
+      return {
+        available: false,
+        items: [],
+        notice: "Run the latest Supabase schema to enable cloud restore history.",
+      };
+    }
+    throw error;
+  }
+
+  return {
+    available: true,
+    items: Array.isArray(data) ? data : [],
+    notice: "",
+  };
+}
+
+async function createCloudWorkspaceBackup(state, { workspaceId, userId = null, version = 0, reason = "autosave" } = {}) {
+  if (!hasMeaningfulWorkspaceData(state)) {
+    return {
+      available: true,
+      saved: false,
+      entry: null,
+      notice: "Skipping empty backup snapshot.",
+    };
+  }
+
+  const latestResponse = await supabase
+    .from("workspace_backups")
+    .select("id,state,workspace_version,created_at")
+    .eq("workspace_id", workspaceId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (latestResponse.error) {
+    if (isWorkspaceBackupsTableMissing(latestResponse.error)) {
+      return {
+        available: false,
+        saved: false,
+        entry: null,
+        notice: "Cloud restore history table is missing.",
+      };
+    }
+    throw latestResponse.error;
+  }
+
+  const latest = latestResponse.data || null;
+  const serializedState = JSON.stringify(state || {});
+  const latestSerializedState = latest?.state ? JSON.stringify(latest.state) : "";
+  if (latest && latestSerializedState === serializedState) {
+    return {
+      available: true,
+      saved: false,
+      entry: latest,
+      notice: "Latest backup already matches current state.",
+    };
+  }
+
+  const summary = buildWorkspaceBackupSummary(state);
+  const { data, error } = await supabase
+    .from("workspace_backups")
+    .insert({
+      workspace_id: workspaceId,
+      workspace_version: Number(version || 0),
+      state,
+      created_by: userId,
+      reason,
+      summary,
+    })
+    .select("id,workspace_id,workspace_version,created_at,created_by,reason,summary")
+    .single();
+
+  if (error) {
+    if (isWorkspaceBackupsTableMissing(error)) {
+      return {
+        available: false,
+        saved: false,
+        entry: null,
+        notice: "Cloud restore history table is missing.",
+      };
+    }
+    throw error;
+  }
+
+  return {
+    available: true,
+    saved: true,
+    entry: data || null,
+    notice: "",
+  };
+}
+
+export async function restoreCloudWorkspaceBackup(backupId, { workspaceId = supabaseWorkspaceId, userId = null } = {}) {
+  if (!supabaseEnabled || !supabase) throw new Error("Supabase is not configured.");
+  await ensureCloudWorkspaceMembership(workspaceId);
+
+  const { data, error } = await supabase
+    .from("workspace_backups")
+    .select("id,workspace_id,state,workspace_version,created_at")
+    .eq("workspace_id", workspaceId)
+    .eq("id", backupId)
+    .maybeSingle();
+
+  if (error) {
+    if (isWorkspaceBackupsTableMissing(error)) {
+      throw new Error("Cloud restore history is not configured yet. Run the latest Supabase schema first.");
+    }
+    throw error;
+  }
+
+  if (!data?.state) {
+    throw new Error("Backup snapshot not found.");
+  }
+
+  return saveCloudWorkspace(data.state, {
+    workspaceId,
+    userId,
+    backupReason: `restore:${backupId}`,
+  });
+}
+
+export async function saveCloudWorkspace(state, { workspaceId = supabaseWorkspaceId, userId = null, backupReason = "autosave" } = {}) {
   if (!supabaseEnabled || !supabase) throw new Error("Supabase is not configured.");
   await ensureCloudWorkspaceMembership(workspaceId);
 
@@ -153,10 +300,34 @@ export async function saveCloudWorkspace(state, { workspaceId = supabaseWorkspac
   if (error) throw error;
   if (!data) throw new Error("Cloud workspace save returned no row.");
 
+  let backup = {
+    available: false,
+    saved: false,
+    entry: null,
+    notice: "",
+  };
+
+  try {
+    backup = await createCloudWorkspaceBackup(state, {
+      workspaceId,
+      userId,
+      version: Number(data.version || 0),
+      reason: backupReason,
+    });
+  } catch (backupError) {
+    backup = {
+      available: true,
+      saved: false,
+      entry: null,
+      notice: backupError instanceof Error ? backupError.message : "Cloud backup history failed.",
+    };
+  }
+
   return {
     id: data.id,
     version: Number(data.version || 0),
     updatedAt: data.updated_at || null,
+    backup,
   };
 }
 
