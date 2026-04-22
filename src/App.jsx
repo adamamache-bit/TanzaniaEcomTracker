@@ -4886,8 +4886,11 @@ export default function App() {
           <SidebarItem active={["products", "stock"].includes(activePage)} onClick={() => setActivePage("products")} icon={<Archive size={18} />} label="Stock" />
           <SidebarItem active={activePage === "multiDashboard"} onClick={() => setActivePage("multiDashboard")} icon={<Boxes size={18} />} label="Fichier" />
           <SidebarItem active={["tracking", "serviceSum", "situations", "profitCenter"].includes(activePage)} onClick={() => setActivePage("tracking")} icon={<Calculator size={18} />} label="Finance" />
+          <SidebarItem active={activePage === "situations"} onClick={() => setActivePage("situations")} icon={<Calculator size={18} />} label="Rentabilité" />
+          <SidebarItem active={activePage === "profitCenter"} onClick={() => setActivePage("profitCenter")} icon={<Wallet size={18} />} label="Profit Center" />
           <SidebarItem active={["executive", "scaling"].includes(activePage)} onClick={() => setActivePage("executive")} icon={<Rocket size={18} />} label="Performance" />
           <SidebarItem active={["taskCenter", "calendar", "team", "audit", "alerts"].includes(activePage)} onClick={() => setActivePage("taskCenter")} icon={<ClipboardList size={18} />} label="Operations" />
+          <SidebarItem active={activePage === "audit"} onClick={() => setActivePage("audit")} icon={<ClipboardList size={18} />} label="Audit" />
 
           <div style={{ ...styles.card, marginTop: 28, padding: 18, background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(240,247,255,0.8))" }}>
             <div style={{ ...styles.sectionEyebrow, color: textSoft }}>Top performer</div>
@@ -7120,6 +7123,12 @@ export default function App() {
 
 {["tracking", "financeHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button style={activePage === "tracking" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("tracking")}>Tracking</button>
+                <button style={activePage === "serviceSum" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("serviceSum")}>Service Sum</button>
+                <button style={activePage === "situations" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("situations")}>Rentabilité</button>
+                <button style={activePage === "profitCenter" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("profitCenter")}>Profit Center</button>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<ClipboardList size={18} />} title="Tracking rows" value={trackingSummary.rows} sub="Manual and Meta-synced spend rows" />
                 <KpiCard icon={<Wallet size={18} />} title="Ad spend" value={formatTZS(trackingSummary.spend)} sub={`${trackingSummary.orders} customer orders synced`} valueColor={accent} />
@@ -7474,6 +7483,12 @@ export default function App() {
 
 {["serviceSum", "financeHub"].includes(activePage) && (
             <div style={{ ...styles.card, padding: 22 }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+                <button style={activePage === "tracking" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("tracking")}>Tracking</button>
+                <button style={activePage === "serviceSum" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("serviceSum")}>Service Sum</button>
+                <button style={activePage === "situations" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("situations")}>Rentabilité</button>
+                <button style={activePage === "profitCenter" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("profitCenter")}>Profit Center</button>
+              </div>
               <div style={styles.sectionHeader}>
                 <div>
                   <div style={{ fontSize: 22, fontWeight: 800 }}>Service Sum</div>
@@ -7558,6 +7573,12 @@ export default function App() {
 
 {["situations", "financeHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button style={activePage === "tracking" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("tracking")}>Tracking</button>
+                <button style={activePage === "serviceSum" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("serviceSum")}>Service Sum</button>
+                <button style={activePage === "situations" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("situations")}>Rentabilité</button>
+                <button style={activePage === "profitCenter" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("profitCenter")}>Profit Center</button>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Wallet size={18} />} title="Detected Charges" value={formatUsdFromTzs(situationsSummary.detectedChargesTzs)} sub="Products, import, ads, salaries and fixed charges" valueColor={red} />
                 <KpiCard icon={<Users size={18} />} title="Salaries" value={formatUsdFromTzs(situationsSummary.salariesTotalTzs)} sub="Employee payroll included in fixed charges" />
@@ -7916,6 +7937,12 @@ export default function App() {
 
 {["profitCenter", "financeHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button style={activePage === "tracking" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("tracking")}>Tracking</button>
+                <button style={activePage === "serviceSum" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("serviceSum")}>Service Sum</button>
+                <button style={activePage === "situations" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("situations")}>Rentabilité</button>
+                <button style={activePage === "profitCenter" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("profitCenter")}>Profit Center</button>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(6, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Wallet size={18} />} title="Revenue" value={formatUsdFromTzs(profitCenterSummary.revenueTzs)} sub="All products combined" valueColor={green} />
                 <KpiCard icon={<TrendingUp size={18} />} title="Gross Profit" value={formatUsdFromTzs(profitCenterSummary.profitTzs)} sub="Revenue - Meta total ads - delivered cost" valueColor={Number(profitCenterSummary.profitTzs || 0) >= 0 ? green : red} />
@@ -8277,6 +8304,10 @@ export default function App() {
 
 {["audit", "operationsHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button style={activePage === "taskCenter" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("taskCenter")}>Operations</button>
+                <button style={activePage === "audit" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("audit")}>Audit</button>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<LayoutGrid size={18} />} title="Audit Entries" value={auditSummary.totalEntries} sub="Saved history rows" />
                 <KpiCard icon={<ClipboardList size={18} />} title="Import Events" value={auditSummary.imports} sub="Orders or shipping imports" valueColor={accent} />
