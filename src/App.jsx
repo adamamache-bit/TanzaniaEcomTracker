@@ -4881,10 +4881,10 @@ export default function App() {
           </div>
 
           <SidebarItem active={activePage === "dashboard"} onClick={() => setActivePage("dashboard")} icon={<BarChart3 size={18} />} label="Dashboard" />
-          <SidebarItem active={activePage === "customersOrders"} onClick={() => setActivePage("customersOrders")} icon={<Users size={18} />} label="List" />
+          <SidebarItem active={activePage === "customersOrders"} onClick={() => setActivePage("customersOrders")} icon={<Users size={18} />} label="Leads" />
           <SidebarItem active={activePage === "shipping"} onClick={() => setActivePage("shipping")} icon={<ShoppingBag size={18} />} label="Shipping" />
           <SidebarItem active={["products", "stock"].includes(activePage)} onClick={() => setActivePage("products")} icon={<Archive size={18} />} label="Stock" />
-          <SidebarItem active={activePage === "multiDashboard"} onClick={() => setActivePage("multiDashboard")} icon={<Boxes size={18} />} label="Approvisionnement" />
+          <SidebarItem active={activePage === "multiDashboard"} onClick={() => setActivePage("multiDashboard")} icon={<Boxes size={18} />} label="Fichier" />
           <SidebarItem active={["tracking", "serviceSum", "situations", "profitCenter"].includes(activePage)} onClick={() => setActivePage("tracking")} icon={<Calculator size={18} />} label="Finance" />
           <SidebarItem active={["executive", "scaling"].includes(activePage)} onClick={() => setActivePage("executive")} icon={<Rocket size={18} />} label="Performance" />
           <SidebarItem active={["taskCenter", "calendar", "team", "audit", "alerts"].includes(activePage)} onClick={() => setActivePage("taskCenter")} icon={<ClipboardList size={18} />} label="Operations" />
@@ -5821,7 +5821,7 @@ export default function App() {
             <div style={{ ...styles.card, padding: 22 }}>
               <div style={styles.sectionHeader}>
                 <div>
-                  <div style={{ fontSize: 24, fontWeight: 900 }}>Approvisionnement stock</div>
+                  <div style={{ fontSize: 24, fontWeight: 900 }}>Fichier stock</div>
                   <div style={{ color: textSoft, marginTop: 6 }}>
                     {editingProductId
                       ? "Modifiez les informations du lot fournisseur puis enregistrez les changements."
@@ -5847,7 +5847,7 @@ export default function App() {
                   <input style={styles.input} placeholder="Ex: Electric Callus Remover" value={expeditionForm.name} onChange={(e) => setExpeditionForm({ ...expeditionForm, name: e.target.value })} />
                 </div>
                 <div style={styles.fieldBlock}>
-                  <label style={styles.fieldLabel}>Sourcing (China / Dubai)</label>
+                  <label style={styles.fieldLabel}>Source (China / Dubai)</label>
                   <select style={styles.input} value={expeditionForm.source} onChange={(e) => setExpeditionForm({ ...expeditionForm, source: e.target.value })}>
                     <option value="china">China</option>
                     <option value="dubai">Dubai</option>
@@ -6009,7 +6009,7 @@ export default function App() {
                         <input style={styles.input} value={expeditionForm.name} onChange={(e) => setExpeditionForm({ ...expeditionForm, name: e.target.value })} />
                       </div>
                       <div style={styles.fieldBlock}>
-                        <label style={styles.fieldLabel}>Sourcing</label>
+                    <label style={styles.fieldLabel}>Source</label>
                         <select style={styles.input} value={expeditionForm.source} onChange={(e) => setExpeditionForm({ ...expeditionForm, source: e.target.value })}>
                           <option value="china">China</option>
                           <option value="dubai">Dubai</option>
@@ -6362,7 +6362,7 @@ export default function App() {
                       </select>
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Lead Source</label>
+                      <label style={styles.fieldLabel}>Source Lead</label>
                       <select style={styles.input} value={customerForm.leadSource} onChange={(e) => setCustomerForm({ ...customerForm, leadSource: e.target.value })}>
                         <option value="manual">Manual</option>
                         <option value="meta">Meta Ads</option>
@@ -6458,7 +6458,7 @@ export default function App() {
                       <MiniStat label="Status" value={formatStatusLabel(customerForm.status || "new-order")} tone="amber" dark />
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr", "1fr 1fr", "1fr"), gap: 12 }}>
-                      <MiniStat label="Lead source" value={formatStatusLabel(customerForm.leadSource || "manual")} tone="blue" dark sub={customerForm.campaignName || "No campaign"} />
+                      <MiniStat label="Source lead" value={formatStatusLabel(customerForm.leadSource || "manual")} tone="blue" dark sub={customerForm.campaignName || "No campaign"} />
                       <MiniStat label="Priority" value={formatStatusLabel(customerForm.priority || "normal")} tone="amber" dark sub={`${formatStatusLabel(customerForm.customerType || "new")} customer`} />
                     </div>
                     <MiniStat label="Destination" value={customerForm.city || "City not set"} tone="blue" dark sub={customerForm.address || "Address not set"} />
@@ -6557,7 +6557,7 @@ export default function App() {
                         <button style={styles.btnSecondary} onClick={() => setCustomerHistoryTargetId("")}>Close history</button>
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 10 }}>
-                        <MiniStat label="Lead source" value={historyTargetCustomer.leadSource || "manual"} tone="blue" sub={historyTargetCustomer.campaignName || "No campaign"} />
+                        <MiniStat label="Source lead" value={historyTargetCustomer.leadSource || "manual"} tone="blue" sub={historyTargetCustomer.campaignName || "No campaign"} />
                         <MiniStat label="Priority" value={formatStatusLabel(historyTargetCustomer.priority || "normal")} tone="amber" sub={`${formatStatusLabel(historyTargetCustomer.customerType || "new")} customer`} />
                         <MiniStat label="Shipping" value={historyTargetCustomer.carrierName || "Not assigned"} tone="green" sub={historyTargetCustomer.trackingNumber || "No tracking"} />
                         <MiniStat label="Business reason" value={historyTargetCustomer.cancelReason || historyTargetCustomer.unreachedReason || historyTargetCustomer.returnReason || "None"} dark sub="Cancel / unreached / return" />
@@ -6912,7 +6912,7 @@ export default function App() {
                         <button style={styles.btnSecondary} onClick={() => setCustomerHistoryTargetId("")}>Close history</button>
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 10 }}>
-                        <MiniStat label="Lead source" value={historyTargetCustomer.leadSource || "manual"} tone="blue" sub={historyTargetCustomer.campaignName || "No campaign"} />
+                        <MiniStat label="Source lead" value={historyTargetCustomer.leadSource || "manual"} tone="blue" sub={historyTargetCustomer.campaignName || "No campaign"} />
                         <MiniStat label="Priority" value={formatStatusLabel(historyTargetCustomer.priority || "normal")} tone="amber" sub={`${formatStatusLabel(historyTargetCustomer.customerType || "new")} customer`} />
                         <MiniStat label="Shipping" value={historyTargetCustomer.carrierName || "Not assigned"} tone="green" sub={historyTargetCustomer.trackingNumber || "No tracking"} />
                         <MiniStat label="Business reason" value={historyTargetCustomer.cancelReason || historyTargetCustomer.unreachedReason || historyTargetCustomer.returnReason || "None"} dark sub="Cancel / unreached / return" />
