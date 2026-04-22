@@ -4535,10 +4535,13 @@ export default function App() {
       { revenueTzs: 0, deliveredCostTzs: 0, productTrackedProfitTzs: 0, productTrackedAdsTzs: 0, liveObservedAdsTzs: 0, fixedChargesTzs: 0 }
     );
 
-    const adsSpendTzs =
-      Number(metaAdsState.cumulativeTrackedSpendTzs || 0) > 0
+    const hasManualProductAds = Number(totals.productTrackedAdsTzs || 0) > 0;
+    const hasMetaTrackedAds = Number(metaAdsState.cumulativeTrackedSpendTzs || 0) > 0;
+    const adsSpendTzs = hasManualProductAds
+      ? Number(totals.productTrackedAdsTzs || 0)
+      : hasMetaTrackedAds
         ? Number(metaAdsState.cumulativeTrackedSpendTzs || 0)
-        : Number(totals.productTrackedAdsTzs || 0);
+        : 0;
     const profitTzs = Number(totals.revenueTzs || 0) - Number(totals.deliveredCostTzs || 0) - adsSpendTzs;
     const netAfterFixedTzs = profitTzs - Number(totals.fixedChargesTzs || 0);
 
@@ -4547,6 +4550,7 @@ export default function App() {
       adsSpendTzs,
       profitTzs,
       netAfterFixedTzs,
+      adsSourceLabel: hasManualProductAds ? "Manual product ads input" : hasMetaTrackedAds ? "Meta cumulative tracked spend" : "No ads input yet",
       profitableProducts: profitCenterRows.filter((row) => Number(row.cumulativeProfitTzs || 0) > 0).length,
       topProduct: profitCenterRows[0] || null,
       lastHourlyAdsSnapshot: metaAdsState.dailySpendSnapshots?.[0] || null,
@@ -8140,8 +8144,8 @@ export default function App() {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(6, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Wallet size={18} />} title="Revenue" value={formatUsdFromTzs(profitCenterSummary.revenueTzs)} sub="All products combined" valueColor={green} />
-                <KpiCard icon={<TrendingUp size={18} />} title="Gross Profit" value={formatUsdFromTzs(profitCenterSummary.profitTzs)} sub="Revenue - Meta total ads - delivered cost" valueColor={Number(profitCenterSummary.profitTzs || 0) >= 0 ? green : red} />
-                <KpiCard icon={<ClipboardList size={18} />} title="Ads Charges" value={formatUsdFromTzs(profitCenterSummary.adsSpendTzs)} sub={profitCenterSummary.lastHourlyAdsSnapshot ? `Meta maximum total | last ${profitCenterSummary.lastHourlyAdsSnapshot.bucket}` : "Meta maximum total auto check"} valueColor={amber} />
+                <KpiCard icon={<TrendingUp size={18} />} title="Gross Profit" value={formatUsdFromTzs(profitCenterSummary.profitTzs)} sub={`Revenue - delivered cost - ${profitCenterSummary.adsSourceLabel.toLowerCase()}`} valueColor={Number(profitCenterSummary.profitTzs || 0) >= 0 ? green : red} />
+                <KpiCard icon={<ClipboardList size={18} />} title="Ads Charges" value={formatUsdFromTzs(profitCenterSummary.adsSpendTzs)} sub={profitCenterSummary.adsSourceLabel === "Meta cumulative tracked spend" && profitCenterSummary.lastHourlyAdsSnapshot ? `Meta cumulative tracked spend | last ${profitCenterSummary.lastHourlyAdsSnapshot.bucket}` : profitCenterSummary.adsSourceLabel} valueColor={amber} />
                 <KpiCard icon={<Archive size={18} />} title="Product Fixed Charges" value={formatUsdFromTzs(profitCenterSummary.fixedChargesTzs)} sub="Sourcing + import burden by product" valueColor={amber} />
                 <KpiCard icon={<Calculator size={18} />} title="Net After Fixed" value={formatUsdFromTzs(profitCenterSummary.netAfterFixedTzs)} sub="Gross profit after product fixed charges" valueColor={Number(profitCenterSummary.netAfterFixedTzs || 0) >= 0 ? green : red} />
                 <KpiCard icon={<Boxes size={18} />} title="Profitable Products" value={profitCenterSummary.profitableProducts} sub={`${profitCenterRows.length} products tracked`} />
