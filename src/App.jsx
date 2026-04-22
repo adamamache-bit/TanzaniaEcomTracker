@@ -2227,6 +2227,28 @@ export default function App() {
     return payload;
   }, [metaAdsState.accessToken, metaAdsState.accountId]);
 
+  const fetchMetaDailySpendPayload = useCallback(async (date) => {
+    if (!metaAdsState.accessToken.trim()) {
+      throw new Error("Meta access token is required.");
+    }
+    if (!metaAdsState.accountId) {
+      throw new Error("Choose an ad account before syncing Meta daily spend.");
+    }
+
+    const response = await fetch(`${getMetaApiBase()}/spend-daily`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        accessToken: metaAdsState.accessToken.trim(),
+        accountId: metaAdsState.accountId,
+        date,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Unable to load Meta daily spend.");
+    return payload;
+  }, [metaAdsState.accessToken, metaAdsState.accountId]);
+
   const importMetaInsightsPayload = useCallback(
     (payload, options = {}) => {
       const mappedRows = buildMappedMetaRows(payload?.rows || [], products, metaAdsState.campaignMappings);
@@ -2323,39 +2345,76 @@ export default function App() {
 
   const syncMetaTotalSpend = useCallback(async (options = {}) => {
     const todayBucket = getDayBucket(currentTime);
-    if (!options.force && metaAdsState.lastLifetimeSpendSyncDate === todayBucket && Number(metaAdsState.lifetimeSpendTzs || 0) > 0) {
+    const hasBaseline = Number(metaAdsState.baselineTotalSpendTzs || 0) > 0 || Boolean(metaAdsState.baselineSpendBucket);
+    const hasTodaySnapshot = Array.isArray(metaAdsState.dailySpendSnapshots)
+      ? metaAdsState.dailySpendSnapshots.some((entry) => entry.bucket === todayBucket)
+      : false;
+    const shouldFetchDailySpend =
+      hasBaseline &&
+      Boolean(metaAdsState.baselineSpendBucket) &&
+      todayBucket > String(metaAdsState.baselineSpendBucket) &&
+      !hasTodaySnapshot;
+
+    if (
+      !options.force &&
+      metaAdsState.lastLifetimeSpendSyncDate === todayBucket &&
+      Number(metaAdsState.lifetimeSpendTzs || 0) > 0 &&
+      (!shouldFetchDailySpend || hasTodaySnapshot)
+    ) {
       return;
     }
 
-    const payload = await fetchMetaSpendTotalPayload();
-    const amount = Number(payload?.spend || 0);
-    const totalSpendTzs = metaCurrencyIsTzs ? amount : amount * USD_TO_TZS;
-    const capturedAt = payload?.capturedAt || new Date().toISOString();
+    const totalPayload = await fetchMetaSpendTotalPayload();
+    const totalAmount = Number(totalPayload?.spend || 0);
+    const totalSpendTzs = metaCurrencyIsTzs ? totalAmount : totalAmount * USD_TO_TZS;
+    const capturedAt = totalPayload?.capturedAt || new Date().toISOString();
+    const dailyPayload = shouldFetchDailySpend ? await fetchMetaDailySpendPayload(todayBucket) : null;
+    const dailyAmount = Number(dailyPayload?.spend || 0);
+    const dailySpendTzs = metaCurrencyIsTzs ? dailyAmount : dailyAmount * USD_TO_TZS;
 
     setMetaAdsState((prev) => {
-      if (!options.force && prev.lastLifetimeSpendSyncDate === todayBucket && Number(prev.lifetimeSpendTzs || 0) > 0) {
+      const prevHasBaseline = Number(prev.baselineTotalSpendTzs || 0) > 0 || Boolean(prev.baselineSpendBucket);
+      const prevHasTodaySnapshot = Array.isArray(prev.dailySpendSnapshots)
+        ? prev.dailySpendSnapshots.some((entry) => entry.bucket === todayBucket)
+        : false;
+
+      if (
+        !options.force &&
+        prev.lastLifetimeSpendSyncDate === todayBucket &&
+        Number(prev.lifetimeSpendTzs || 0) > 0 &&
+        (prevHasTodaySnapshot || !prevHasBaseline || todayBucket <= String(prev.baselineSpendBucket || ""))
+      ) {
         return prev;
       }
 
-      const existing = Array.isArray(prev.dailySpendSnapshots) ? prev.dailySpendSnapshots.filter((entry) => entry.bucket !== todayBucket) : [];
-      const previousReferenceTotalTzs =
-        existing.length > 0 ? Number(existing[0]?.totalSpendTzs || existing[0]?.newSpendTzs || 0) : 0;
-      const newSpendTzs = existing.length > 0 ? Math.max(0, totalSpendTzs - previousReferenceTotalTzs) : totalSpendTzs;
-      const dailySpendSnapshots = [
-        {
-          id: `meta-daily-${todayBucket}`,
-          bucket: todayBucket,
-          totalSpendTzs,
-          newSpendTzs,
-          capturedAt,
-          source: "meta_maximum",
-        },
-        ...existing,
-      ].slice(0, 120);
-      const cumulativeTrackedSpendTzs = dailySpendSnapshots.reduce((sum, entry) => sum + Number(entry.newSpendTzs || 0), 0);
+      const baselineTotalSpendTzs = prevHasBaseline ? Number(prev.baselineTotalSpendTzs || 0) : totalSpendTzs;
+      const baselineSpendBucket = prevHasBaseline ? prev.baselineSpendBucket || todayBucket : todayBucket;
+      let dailySpendSnapshots = Array.isArray(prev.dailySpendSnapshots) ? [...prev.dailySpendSnapshots] : [];
+
+      if (prevHasBaseline && todayBucket > String(baselineSpendBucket || "") && !prevHasTodaySnapshot) {
+        dailySpendSnapshots = [
+          {
+            id: `meta-daily-${todayBucket}`,
+            bucket: todayBucket,
+            totalSpendTzs,
+            newSpendTzs: Math.max(0, dailySpendTzs),
+            capturedAt: dailyPayload?.capturedAt || capturedAt,
+            source: "meta_daily",
+          },
+          ...dailySpendSnapshots,
+        ]
+          .filter((entry, index, array) => array.findIndex((candidate) => candidate.bucket === entry.bucket) === index)
+          .slice(0, 120);
+      }
+
+      const cumulativeTrackedSpendTzs =
+        baselineTotalSpendTzs +
+        dailySpendSnapshots.reduce((sum, entry) => sum + Number(entry.newSpendTzs || 0), 0);
 
       return {
         ...prev,
+        baselineTotalSpendTzs,
+        baselineSpendBucket,
         lifetimeSpendTzs: totalSpendTzs,
         lastLifetimeSpendSyncDate: todayBucket,
         lifetimeSpendCapturedAt: capturedAt,
@@ -2366,12 +2425,22 @@ export default function App() {
               ...prev.lastSyncSummary,
               accountTotalSpendTzs: totalSpendTzs,
               trackedCumulativeSpendTzs: cumulativeTrackedSpendTzs,
-              lastDailySpendTzs: newSpendTzs,
+              lastDailySpendTzs: Math.max(0, dailySpendTzs),
             }
           : prev.lastSyncSummary,
       };
     });
-  }, [currentTime, fetchMetaSpendTotalPayload, metaAdsState.lastLifetimeSpendSyncDate, metaAdsState.lifetimeSpendTzs, metaCurrencyIsTzs]);
+  }, [
+    currentTime,
+    fetchMetaDailySpendPayload,
+    fetchMetaSpendTotalPayload,
+    metaAdsState.baselineSpendBucket,
+    metaAdsState.baselineTotalSpendTzs,
+    metaAdsState.dailySpendSnapshots,
+    metaAdsState.lastLifetimeSpendSyncDate,
+    metaAdsState.lifetimeSpendTzs,
+    metaCurrencyIsTzs,
+  ]);
 
   const refreshMetaInsights = useCallback(async (options = {}) => {
     setMetaAdsLoading((prev) => ({ ...prev, insights: !options.silent }));
@@ -2411,6 +2480,30 @@ export default function App() {
       setMetaAdsLoading((prev) => ({ ...prev, apply: false }));
     }
   };
+
+  useEffect(() => {
+    if (!metaAdsState.accessToken.trim() || !metaAdsState.accountId) return undefined;
+
+    const bootstrapKey = `${metaAdsState.accountId}|${metaAdsState.accessToken.slice(0, 16)}|meta-baseline`;
+    if (metaSpendBootstrapRef.current === bootstrapKey) return undefined;
+
+    let cancelled = false;
+    const bootstrapMetaBaseline = async () => {
+      try {
+        await syncMetaTotalSpend({ force: true });
+        if (!cancelled) {
+          metaSpendBootstrapRef.current = bootstrapKey;
+        }
+      } catch {
+        // keep silent here: manual refresh button can still show the detailed Meta error
+      }
+    };
+
+    bootstrapMetaBaseline();
+    return () => {
+      cancelled = true;
+    };
+  }, [metaAdsState.accessToken, metaAdsState.accountId, syncMetaTotalSpend]);
 
   useEffect(() => {
     if (!metaAdsState.autoSync) return undefined;
