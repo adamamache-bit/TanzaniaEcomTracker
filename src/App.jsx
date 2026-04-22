@@ -4885,7 +4885,7 @@ export default function App() {
           <SidebarItem active={activePage === "shipping"} onClick={() => setActivePage("shipping")} icon={<ShoppingBag size={18} />} label="Shipping" />
           <SidebarItem active={["products", "stock"].includes(activePage)} onClick={() => setActivePage("products")} icon={<Archive size={18} />} label="Stock" />
           <SidebarItem active={activePage === "multiDashboard"} onClick={() => setActivePage("multiDashboard")} icon={<Boxes size={18} />} label="Fichier" />
-          <SidebarItem active={["tracking", "serviceSum", "situations", "profitCenter"].includes(activePage)} onClick={() => setActivePage("tracking")} icon={<Calculator size={18} />} label="Finance" />
+          <SidebarItem active={activePage === "tracking"} onClick={() => setActivePage("tracking")} icon={<Calculator size={18} />} label="Finance" />
           <SidebarItem active={activePage === "serviceSum"} onClick={() => setActivePage("serviceSum")} icon={<Calculator size={18} />} label="Simulation" />
           <SidebarItem active={activePage === "situations"} onClick={() => setActivePage("situations")} icon={<Calculator size={18} />} label="Rentabilité" />
           <SidebarItem active={activePage === "profitCenter"} onClick={() => setActivePage("profitCenter")} icon={<Wallet size={18} />} label="Profit Center" />
