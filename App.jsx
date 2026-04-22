@@ -37,8 +37,10 @@ import {
 } from "recharts";
 import {
   getCloudSession,
+  listCloudWorkspaceBackups,
   loadCloudWorkspace,
   onCloudAuthStateChange,
+  restoreCloudWorkspaceBackup,
   saveCloudWorkspace,
   signInCloud,
   signOutCloud,
@@ -754,6 +756,13 @@ export default function App() {
     updatedAt: null,
     notice: "Local workspace mode",
   });
+  const [cloudBackupState, setCloudBackupState] = useState({
+    loading: false,
+    restoringId: null,
+    available: true,
+    items: [],
+    notice: "",
+  });
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [customerListFilters, setCustomerListFilters] = useState({
     search: "",
@@ -1201,7 +1210,7 @@ export default function App() {
             workspaceId: supabaseWorkspaceId,
             userId: cloudAuth.user.id,
           });
-          payload = { ok: true, version: saved.version, updatedAt: saved.updatedAt };
+          payload = { ok: true, version: saved.version, updatedAt: saved.updatedAt, backup: saved.backup || null };
         } else {
           const response = await fetch(getSharedApiBase(), {
             method: "POST",
@@ -1228,6 +1237,35 @@ export default function App() {
           updatedAt: payload.updatedAt || prev.updatedAt || null,
           notice: successNotice,
         }));
+        if (supabaseEnabled && payload.backup) {
+          setCloudBackupState((prev) => {
+            if (!payload.backup.available) {
+              return {
+                ...prev,
+                available: false,
+                notice: payload.backup.notice || "Run the latest Supabase schema to enable restore history.",
+              };
+            }
+
+            if (!payload.backup.saved || !payload.backup.entry) {
+              return payload.backup.notice
+                ? {
+                    ...prev,
+                    available: true,
+                    notice: payload.backup.notice,
+                  }
+                : prev;
+            }
+
+            const nextItems = [payload.backup.entry, ...prev.items.filter((item) => item.id !== payload.backup.entry.id)].slice(0, 8);
+            return {
+              ...prev,
+              available: true,
+              items: nextItems,
+              notice: "",
+            };
+          });
+        }
         return true;
       } catch (error) {
         lastSharedPayloadRef.current = "";
@@ -1394,6 +1432,128 @@ export default function App() {
       window.clearInterval(interval);
     };
   }, [applySharedStateSnapshot, cloudAuth.user, persistSharedSnapshot]);
+
+  const refreshCloudBackups = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!supabaseEnabled || !cloudAuth.user) {
+        setCloudBackupState({
+          loading: false,
+          restoringId: null,
+          available: true,
+          items: [],
+          notice: "",
+        });
+        return;
+      }
+
+      if (!silent) {
+        setCloudBackupState((prev) => ({
+          ...prev,
+          loading: true,
+          notice: prev.notice && !prev.available ? prev.notice : "",
+        }));
+      }
+
+      try {
+        const response = await listCloudWorkspaceBackups(supabaseWorkspaceId, 8);
+        setCloudBackupState((prev) => ({
+          ...prev,
+          loading: false,
+          available: response.available,
+          items: response.items || [],
+          notice: response.notice || "",
+        }));
+      } catch (error) {
+        setCloudBackupState((prev) => ({
+          ...prev,
+          loading: false,
+          available: false,
+          notice: error instanceof Error ? error.message : "Unable to load cloud restore history.",
+        }));
+      }
+    },
+    [cloudAuth.user]
+  );
+
+  const restoreCloudBackup = useCallback(
+    async (backupId) => {
+      if (!cloudAuth.user) return;
+      const targetBackup = cloudBackupState.items.find((item) => item.id === backupId);
+      const backupLabel = targetBackup?.created_at ? new Date(targetBackup.created_at).toLocaleString() : `#${backupId}`;
+      if (!window.confirm(`Restore the workspace from backup ${backupLabel}? Current live data will be replaced by that saved version.`)) {
+        return;
+      }
+
+      setCloudBackupState((prev) => ({
+        ...prev,
+        restoringId: backupId,
+        notice: "",
+      }));
+      setSharedWorkspace((prev) => ({
+        ...prev,
+        notice: "Restoring cloud backup...",
+        saving: true,
+      }));
+
+      try {
+        await restoreCloudWorkspaceBackup(backupId, {
+          workspaceId: supabaseWorkspaceId,
+          userId: cloudAuth.user.id,
+        });
+
+        const restoredWorkspace = await loadCloudWorkspace(supabaseWorkspaceId);
+        if (restoredWorkspace?.state) {
+          applySharedStateSnapshot(restoredWorkspace.state);
+          latestSharedStateRef.current = restoredWorkspace.state;
+          lastSharedPayloadRef.current = JSON.stringify(restoredWorkspace.state || {});
+          sharedVersionRef.current = Number(restoredWorkspace.version || sharedVersionRef.current || 0);
+        }
+
+        setSharedWorkspace((prev) => ({
+          ...prev,
+          saving: false,
+          initialized: true,
+          available: true,
+          mode: "cloud",
+          version: Number(restoredWorkspace?.version || prev.version || 0),
+          updatedAt: restoredWorkspace?.updatedAt || prev.updatedAt || null,
+          notice: "Cloud backup restored",
+        }));
+        await refreshCloudBackups({ silent: true });
+      } catch (error) {
+        setSharedWorkspace((prev) => ({
+          ...prev,
+          saving: false,
+          notice: `Cloud backup restore failed${error instanceof Error && error.message ? `: ${error.message}` : ""}`,
+        }));
+        setCloudBackupState((prev) => ({
+          ...prev,
+          notice: error instanceof Error ? error.message : "Unable to restore cloud backup.",
+        }));
+      } finally {
+        setCloudBackupState((prev) => ({
+          ...prev,
+          restoringId: null,
+        }));
+      }
+    },
+    [applySharedStateSnapshot, cloudAuth.user, cloudBackupState.items, refreshCloudBackups]
+  );
+
+  useEffect(() => {
+    if (!supabaseEnabled || !cloudAuth.user) {
+      setCloudBackupState({
+        loading: false,
+        restoringId: null,
+        available: true,
+        items: [],
+        notice: "",
+      });
+      return;
+    }
+
+    void refreshCloudBackups({ silent: false });
+  }, [cloudAuth.user, refreshCloudBackups]);
 
   useEffect(() => {
     if (!supabaseEnabled || !cloudAuth.user) return undefined;
@@ -4798,13 +4958,71 @@ export default function App() {
                         </button>
                       </div>
                     ) : (
-                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 160px", "1fr", "1fr"), gap: 10, marginTop: 14 }}>
-                        <div style={{ ...styles.badge, justifyContent: "flex-start", padding: "12px 14px", height: "100%", background: "rgba(31,143,95,0.1)", color: green, border: "1px solid rgba(31,143,95,0.16)" }}>
-                          Workspace: {supabaseWorkspaceId}
+                      <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 160px", "1fr", "1fr"), gap: 10 }}>
+                          <div style={{ ...styles.badge, justifyContent: "flex-start", padding: "12px 14px", height: "100%", background: "rgba(31,143,95,0.1)", color: green, border: "1px solid rgba(31,143,95,0.16)" }}>
+                            Workspace: {supabaseWorkspaceId}
+                          </div>
+                          <button style={styles.btnSecondary} onClick={logoutCloudAuth}>
+                            Sign out
+                          </button>
                         </div>
-                        <button style={styles.btnSecondary} onClick={logoutCloudAuth}>
-                          Sign out
-                        </button>
+                        <div style={{ ...styles.card, padding: 14, borderRadius: 16, boxShadow: "none", background: "linear-gradient(180deg, rgba(246,249,255,0.96), rgba(255,255,255,0.98))" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: accent }}>Cloud restore points</div>
+                              <div style={{ marginTop: 6, fontWeight: 800, fontSize: 16 }}>
+                                {cloudBackupState.available ? `${cloudBackupState.items.length} recent backup${cloudBackupState.items.length > 1 ? "s" : ""}` : "Restore history not enabled yet"}
+                              </div>
+                            </div>
+                            <button style={styles.btnSecondary} onClick={() => void refreshCloudBackups()} disabled={cloudBackupState.loading || Boolean(cloudBackupState.restoringId)}>
+                              {cloudBackupState.loading ? "Loading..." : "Refresh backups"}
+                            </button>
+                          </div>
+                          {cloudBackupState.notice ? (
+                            <div style={{ color: cloudBackupState.available ? textSoft : amber, marginTop: 10, lineHeight: 1.5 }}>{cloudBackupState.notice}</div>
+                          ) : null}
+                          {cloudBackupState.available && cloudBackupState.items.length ? (
+                            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                              {cloudBackupState.items.map((backup) => {
+                                const summary = backup.summary || {};
+                                return (
+                                  <div
+                                    key={backup.id}
+                                    style={{
+                                      display: "grid",
+                                      gridTemplateColumns: responsiveColumns("minmax(0, 1fr) 150px", "1fr", "1fr"),
+                                      gap: 10,
+                                      alignItems: "center",
+                                      padding: "12px 14px",
+                                      borderRadius: 14,
+                                      border: `1px solid ${cardBorder}`,
+                                      background: "rgba(255,255,255,0.92)",
+                                    }}
+                                  >
+                                    <div style={{ minWidth: 0 }}>
+                                      <div style={{ fontWeight: 800 }}>
+                                        {backup.created_at ? new Date(backup.created_at).toLocaleString() : `Backup #${backup.id}`}
+                                      </div>
+                                      <div style={{ color: textSoft, marginTop: 4, fontSize: 13, lineHeight: 1.5 }}>
+                                        Reason: {backup.reason || "autosave"} | Version {formatInteger(backup.workspace_version || 0)} | {formatInteger(summary.products || 0)} products | {formatInteger(summary.customers || 0)} orders | {formatInteger(summary.tracking || 0)} tracking rows
+                                      </div>
+                                    </div>
+                                    <button
+                                      style={styles.btnSecondary}
+                                      onClick={() => void restoreCloudBackup(backup.id)}
+                                      disabled={cloudBackupState.loading || cloudBackupState.restoringId === backup.id}
+                                    >
+                                      {cloudBackupState.restoringId === backup.id ? "Restoring..." : "Restore"}
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : cloudBackupState.available && !cloudBackupState.loading ? (
+                            <div style={{ color: textSoft, marginTop: 12 }}>No restore point saved yet. The next cloud save will create the first one automatically.</div>
+                          ) : null}
+                        </div>
                       </div>
                     )}
                   </div>
