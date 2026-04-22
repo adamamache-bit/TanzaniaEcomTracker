@@ -4396,35 +4396,84 @@ export default function App() {
   }, [productDashboardMap, products]);
 
   const profitCenterRows = useMemo(() => {
-    return productDashboard
-      .map((product) => {
-        const adInput = situationData.adInputs?.[product.id] || {};
-        const manualAdsUsedTzs = Number(adInput.averageLeadCostTzs || 0) * Number(adInput.incomingLeads || 0);
-        const liveObservedAdsTzs = Number(product.spend || 0);
-        const cumulativeAdsTzs = manualAdsUsedTzs;
-        const deliveredLogisticsTzs = Number(product.revenue || 0) - Number(product.profit || 0) - liveObservedAdsTzs;
-        const cumulativeProfitTzs = Number(product.revenue || 0) - cumulativeAdsTzs - deliveredLogisticsTzs;
-        const fixedProductChargesTzs =
-          (Number(product.purchaseUnitPrice || 0) * Number(product.totalQty || 0) * USD_TO_TZS) +
-          Number(product.shippingTotal || 0) +
-          Number(product.otherCharges || 0);
-        const netAfterFixedTzs = cumulativeProfitTzs - fixedProductChargesTzs;
-        const deliveredCount = Number(product.delivered || product.deliveredUnits || 0);
+    const baseRows = productDashboard.map((product) => {
+      const adInput = situationData.adInputs?.[product.id] || {};
+      const manualAdsUsedTzs = Number(adInput.averageLeadCostTzs || 0) * Number(adInput.incomingLeads || 0);
+      const liveObservedAdsTzs = Number(product.spend || 0);
+      const stockPurchaseTzs = Number(product.purchaseUnitPrice || 0) * Number(product.totalQty || 0) * USD_TO_TZS;
+      const importChargesTzs = Number(product.shippingTotal || 0) + Number(product.otherCharges || 0);
+      const deliveryChargesTzs = Number(product.delivery || 0) * Number(product.deliveredUnits || 0);
+      const productChargesTzs = stockPurchaseTzs + importChargesTzs + deliveryChargesTzs;
+
+      return {
+        ...product,
+        manualAdsUsedTzs,
+        liveObservedAdsTzs,
+        stockPurchaseTzs,
+        importChargesTzs,
+        deliveryChargesTzs,
+        productChargesTzs,
+      };
+    });
+
+    const trackedAdsTotalTzs = baseRows.reduce((sum, row) => sum + Number(row.liveObservedAdsTzs || 0), 0);
+    const manualAdsTotalTzs = baseRows.reduce((sum, row) => sum + Number(row.manualAdsUsedTzs || 0), 0);
+    const metaAdsTotalTzs = Number(metaAdsState.cumulativeTrackedSpendTzs || 0);
+
+    let adsSpendTzs = 0;
+    let adsSourceLabel = "No ads input yet";
+    let allocationMode = "equal";
+
+    if (metaAdsTotalTzs > 0) {
+      adsSpendTzs = metaAdsTotalTzs;
+      adsSourceLabel = "Meta connected account";
+      allocationMode = trackedAdsTotalTzs > 0 ? "tracked-spend" : "orders";
+    } else if (trackedAdsTotalTzs > 0) {
+      adsSpendTzs = trackedAdsTotalTzs;
+      adsSourceLabel = "Tracking ads rows";
+      allocationMode = "tracked-spend";
+    } else if (manualAdsTotalTzs > 0) {
+      adsSpendTzs = manualAdsTotalTzs;
+      adsSourceLabel = "Manual ads input";
+      allocationMode = "manual-spend";
+    }
+
+    const totalOrders = baseRows.reduce((sum, row) => sum + Number(row.orders || 0), 0);
+    const totalRevenue = baseRows.reduce((sum, row) => sum + Number(row.revenue || 0), 0);
+
+    const getAllocationWeight = (row) => {
+      if (allocationMode === "tracked-spend") return Number(row.liveObservedAdsTzs || 0);
+      if (allocationMode === "manual-spend") return Number(row.manualAdsUsedTzs || 0);
+      if (allocationMode === "orders") return Number(row.orders || 0);
+      if (totalRevenue > 0) return Number(row.revenue || 0);
+      return 1;
+    };
+
+    const totalAllocationWeight = Math.max(
+      baseRows.reduce((sum, row) => sum + getAllocationWeight(row), 0),
+      adsSpendTzs > 0 ? (allocationMode === "orders" && totalOrders > 0 ? totalOrders : 0) : 0,
+      baseRows.length > 0 ? 1 : 0
+    );
+
+    return baseRows
+      .map((row) => {
+        const weight = totalAllocationWeight > 0 ? getAllocationWeight(row) / totalAllocationWeight : 0;
+        const adsChargesTzs = adsSpendTzs > 0 ? adsSpendTzs * weight : 0;
+        const totalChargesTzs = Number(row.productChargesTzs || 0) + adsChargesTzs;
+        const balanceTzs = Number(row.revenue || 0) - totalChargesTzs;
+        const deliveredCount = Number(row.delivered || row.deliveredUnits || 0);
         return {
-          ...product,
-          manualAdsUsedTzs,
-          liveObservedAdsTzs,
-          cumulativeAdsTzs,
-          deliveredLogisticsTzs,
-          cumulativeProfitTzs,
-          fixedProductChargesTzs,
-          netAfterFixedTzs,
-          profitPerOrderTzs: deliveredCount > 0 ? cumulativeProfitTzs / deliveredCount : 0,
-          marginPercentLive: Number(product.revenue || 0) > 0 ? (cumulativeProfitTzs / Number(product.revenue || 0)) * 100 : 0,
+          ...row,
+          adsChargesTzs,
+          totalChargesTzs,
+          balanceTzs,
+          adsSourceLabel,
+          balancePerOrderTzs: deliveredCount > 0 ? balanceTzs / deliveredCount : 0,
+          balanceMarginPercent: Number(row.revenue || 0) > 0 ? (balanceTzs / Number(row.revenue || 0)) * 100 : 0,
         };
       })
-      .sort((a, b) => Number(b.cumulativeProfitTzs || 0) - Number(a.cumulativeProfitTzs || 0));
-  }, [productDashboard, situationData.adInputs]);
+      .sort((a, b) => Number(b.balanceTzs || 0) - Number(a.balanceTzs || 0));
+  }, [metaAdsState.cumulativeTrackedSpendTzs, productDashboard, situationData.adInputs]);
 
   const auditRows = useMemo(() => {
     return customers
@@ -4525,37 +4574,26 @@ export default function App() {
     const totals = profitCenterRows.reduce(
       (acc, row) => {
         acc.revenueTzs += Number(row.revenue || 0);
-        acc.deliveredCostTzs += Number(row.deliveredLogisticsTzs || 0);
-        acc.productTrackedProfitTzs += Number(row.cumulativeProfitTzs || 0);
-        acc.productTrackedAdsTzs += Number(row.cumulativeAdsTzs || 0);
-        acc.liveObservedAdsTzs += Number(row.liveObservedAdsTzs || 0);
-        acc.fixedChargesTzs += Number(row.fixedProductChargesTzs || 0);
+        acc.stockPurchaseTzs += Number(row.stockPurchaseTzs || 0);
+        acc.importChargesTzs += Number(row.importChargesTzs || 0);
+        acc.deliveryChargesTzs += Number(row.deliveryChargesTzs || 0);
+        acc.productChargesTzs += Number(row.productChargesTzs || 0);
+        acc.adsSpendTzs += Number(row.adsChargesTzs || 0);
+        acc.totalChargesTzs += Number(row.totalChargesTzs || 0);
+        acc.balanceTzs += Number(row.balanceTzs || 0);
         return acc;
       },
-      { revenueTzs: 0, deliveredCostTzs: 0, productTrackedProfitTzs: 0, productTrackedAdsTzs: 0, liveObservedAdsTzs: 0, fixedChargesTzs: 0 }
+      { revenueTzs: 0, stockPurchaseTzs: 0, importChargesTzs: 0, deliveryChargesTzs: 0, productChargesTzs: 0, adsSpendTzs: 0, totalChargesTzs: 0, balanceTzs: 0 }
     );
-
-    const hasManualProductAds = Number(totals.productTrackedAdsTzs || 0) > 0;
-    const hasMetaTrackedAds = Number(metaAdsState.cumulativeTrackedSpendTzs || 0) > 0;
-    const adsSpendTzs = hasManualProductAds
-      ? Number(totals.productTrackedAdsTzs || 0)
-      : hasMetaTrackedAds
-        ? Number(metaAdsState.cumulativeTrackedSpendTzs || 0)
-        : 0;
-    const profitTzs = Number(totals.revenueTzs || 0) - Number(totals.deliveredCostTzs || 0) - adsSpendTzs;
-    const netAfterFixedTzs = profitTzs - Number(totals.fixedChargesTzs || 0);
 
     return {
       ...totals,
-      adsSpendTzs,
-      profitTzs,
-      netAfterFixedTzs,
-      adsSourceLabel: hasManualProductAds ? "Manual product ads input" : hasMetaTrackedAds ? "Meta cumulative tracked spend" : "No ads input yet",
-      profitableProducts: profitCenterRows.filter((row) => Number(row.cumulativeProfitTzs || 0) > 0).length,
+      adsSourceLabel: profitCenterRows[0]?.adsSourceLabel || "No ads input yet",
+      profitableProducts: profitCenterRows.filter((row) => Number(row.balanceTzs || 0) > 0).length,
       topProduct: profitCenterRows[0] || null,
       lastHourlyAdsSnapshot: metaAdsState.dailySpendSnapshots?.[0] || null,
     };
-  }, [metaAdsState.cumulativeTrackedSpendTzs, metaAdsState.dailySpendSnapshots, profitCenterRows]);
+  }, [metaAdsState.dailySpendSnapshots, profitCenterRows]);
 
   const auditSummary = useMemo(() => {
     return {
@@ -8047,7 +8085,7 @@ export default function App() {
                 <KpiCard icon={<Calculator size={18} />} title="Net After Fixed" value={formatUsdFromTzs(executiveSummary.estimatedNetAfterFixedTzs)} sub="Estimated profit after fixed charges" valueColor={Number(executiveSummary.estimatedNetAfterFixedTzs || 0) >= 0 ? green : red} />
                 <KpiCard icon={<Archive size={18} />} title="Stock Value" value={formatUsdFromTzs(executiveSummary.stockImmobilizedTzs)} sub="Capital locked in available stock" valueColor={amber} />
                 <KpiCard icon={<AlertTriangle size={18} />} title="Open Tasks" value={executiveSummary.openTasks} sub={`${executiveSummary.highPriorityTasks} high priority`} valueColor={executiveSummary.highPriorityTasks > 0 ? red : accent} />
-                <KpiCard icon={<Rocket size={18} />} title="Top Product" value={profitCenterSummary.topProduct?.name || "N/A"} sub={profitCenterSummary.topProduct ? `${formatUsdFromTzs(profitCenterSummary.topProduct.cumulativeProfitTzs || 0)} cumulative profit` : "No product data yet"} />
+                <KpiCard icon={<Rocket size={18} />} title="Top Product" value={profitCenterSummary.topProduct?.name || "N/A"} sub={profitCenterSummary.topProduct ? `${formatUsdFromTzs(profitCenterSummary.topProduct.balanceTzs || 0)} balance` : "No product data yet"} />
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1.2fr 1fr", "1fr", "1fr"), gap: 20 }}>
@@ -8143,11 +8181,11 @@ export default function App() {
                 <button style={activePage === "profitCenter" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setActivePage("profitCenter")}>Profit Center</button>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(6, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
-                <KpiCard icon={<Wallet size={18} />} title="Revenue" value={formatUsdFromTzs(profitCenterSummary.revenueTzs)} sub="All products combined" valueColor={green} />
-                <KpiCard icon={<TrendingUp size={18} />} title="Gross Profit" value={formatUsdFromTzs(profitCenterSummary.profitTzs)} sub={`Revenue - delivered cost - ${profitCenterSummary.adsSourceLabel.toLowerCase()}`} valueColor={Number(profitCenterSummary.profitTzs || 0) >= 0 ? green : red} />
-                <KpiCard icon={<ClipboardList size={18} />} title="Ads Charges" value={formatUsdFromTzs(profitCenterSummary.adsSpendTzs)} sub={profitCenterSummary.adsSourceLabel === "Meta cumulative tracked spend" && profitCenterSummary.lastHourlyAdsSnapshot ? `Meta cumulative tracked spend | last ${profitCenterSummary.lastHourlyAdsSnapshot.bucket}` : profitCenterSummary.adsSourceLabel} valueColor={amber} />
-                <KpiCard icon={<Archive size={18} />} title="Product Fixed Charges" value={formatUsdFromTzs(profitCenterSummary.fixedChargesTzs)} sub="Sourcing + import burden by product" valueColor={amber} />
-                <KpiCard icon={<Calculator size={18} />} title="Net After Fixed" value={formatUsdFromTzs(profitCenterSummary.netAfterFixedTzs)} sub="Gross profit after product fixed charges" valueColor={Number(profitCenterSummary.netAfterFixedTzs || 0) >= 0 ? green : red} />
+                <KpiCard icon={<Wallet size={18} />} title="Money In" value={formatUsdFromTzs(profitCenterSummary.revenueTzs)} sub="Products sold and delivered" valueColor={green} />
+                <KpiCard icon={<Archive size={18} />} title="Product Charges" value={formatUsdFromTzs(profitCenterSummary.productChargesTzs)} sub="Purchase + import + delivery charges" valueColor={amber} />
+                <KpiCard icon={<ClipboardList size={18} />} title="Ads Charges" value={formatUsdFromTzs(profitCenterSummary.adsSpendTzs)} sub={profitCenterSummary.adsSourceLabel === "Meta connected account" && profitCenterSummary.lastHourlyAdsSnapshot ? `Meta connected account | last ${profitCenterSummary.lastHourlyAdsSnapshot.bucket}` : profitCenterSummary.adsSourceLabel} valueColor={amber} />
+                <KpiCard icon={<Calculator size={18} />} title="Total Out" value={formatUsdFromTzs(profitCenterSummary.totalChargesTzs)} sub="All product charges + ads" valueColor={amber} />
+                <KpiCard icon={<TrendingUp size={18} />} title="Balance" value={formatUsdFromTzs(profitCenterSummary.balanceTzs)} sub="Money in - all charges" valueColor={Number(profitCenterSummary.balanceTzs || 0) >= 0 ? green : red} />
                 <KpiCard icon={<Boxes size={18} />} title="Profitable Products" value={profitCenterSummary.profitableProducts} sub={`${profitCenterRows.length} products tracked`} />
               </div>
 
@@ -8155,9 +8193,9 @@ export default function App() {
                 <div style={styles.sectionHeader}>
                   <div>
                     <div style={styles.sectionEyebrow}>Net profit center</div>
-                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Product economics and profitability</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Cash in, charges and balance by product</div>
                     <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>
-                      This table helps you see which products truly create cash, which ones are eating margin, and where fixed product cost is still too heavy.
+                      Cette vue suit une logique simple: entrees d'argent des ventes livrees, toutes les charges produit, les charges ads, puis la balance finale.
                     </div>
                   </div>
                 </div>
@@ -8166,7 +8204,7 @@ export default function App() {
                   <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
                     <thead>
                       <tr>
-                        {["Product", "Orders", "Delivered Units", "Revenue", "Ads Charges", "Gross Profit", "Fixed Product Charges", "Net After Fixed", "Profit / Order", "Margin", "Action"].map((head) => (
+                        {["Product", "Orders", "Delivered Units", "Money In", "Stock Purchase", "Import Charges", "Delivery Charges", "Ads Charges", "Total Out", "Balance", "Balance / Order", "Action"].map((head) => (
                           <th key={head} style={{ textAlign: "left", padding: "14px 12px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247, 243, 237, 0.92)" }}>
                             {head}
                           </th>
@@ -8183,22 +8221,23 @@ export default function App() {
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.orders}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.deliveredUnits}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.revenue)}</td>
+                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.stockPurchaseTzs)}</td>
+                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.importChargesTzs)}</td>
+                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.deliveryChargesTzs)}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>
-                            <div style={{ fontWeight: 800 }}>{formatUsdFromTzs(row.cumulativeAdsTzs)}</div>
+                            <div style={{ fontWeight: 800 }}>{formatUsdFromTzs(row.adsChargesTzs)}</div>
                             <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>
-                              {Number(row.cumulativeAdsTzs || 0) > 0 ? "Manual ads input" : "No ads input yet"}
+                              {row.adsSourceLabel}
                             </div>
                           </td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, color: Number(row.cumulativeProfitTzs || 0) >= 0 ? green : red, fontWeight: 800 }}>
-                            <div>{formatUsdFromTzs(row.cumulativeProfitTzs)}</div>
-                            <div style={{ color: textSoft, fontSize: 12, marginTop: 4, fontWeight: 600 }}>Delivered cost {formatUsdFromTzs(row.deliveredLogisticsTzs)}</div>
+                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800 }}>
+                            <div>{formatUsdFromTzs(row.totalChargesTzs)}</div>
+                            <div style={{ color: textSoft, fontSize: 12, marginTop: 4, fontWeight: 600 }}>Product + ads charges</div>
                           </td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.fixedProductChargesTzs)}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, color: Number(row.netAfterFixedTzs || 0) >= 0 ? green : red, fontWeight: 800 }}>{formatUsdFromTzs(row.netAfterFixedTzs)}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.profitPerOrderTzs)}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{Number(row.marginPercentLive || 0).toFixed(1)}%</td>
+                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, color: Number(row.balanceTzs || 0) >= 0 ? green : red, fontWeight: 800 }}>{formatUsdFromTzs(row.balanceTzs)}</td>
+                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.balancePerOrderTzs)}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>
-                            <div style={getDecisionStyle(row.decision || "WATCH")}>{row.decision || "WATCH"}</div>
+                            <div style={getDecisionStyle(Number(row.balanceTzs || 0) > 0 ? "OK" : "WATCH")}>{Number(row.balanceTzs || 0) > 0 ? "POSITIVE" : "NEGATIVE"}</div>
                           </td>
                         </tr>
                       ))}
@@ -8219,12 +8258,13 @@ export default function App() {
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(2, minmax(0, 1fr))", "1fr", "1fr"), gap: 12, marginTop: 14 }}>
                     <div style={{ ...styles.softStat, padding: 14 }}>
-                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: textSoft }}>Meta total ads spent</div>
-                      <div style={{ marginTop: 8, fontSize: 24, fontWeight: 900, color: amber }}>{formatUsdFromTzs(profitCenterSummary.adsSpendTzs)}</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: textSoft }}>Ads source in use</div>
+                      <div style={{ marginTop: 8, fontSize: 18, fontWeight: 900, color: accent }}>{profitCenterSummary.adsSourceLabel}</div>
                     </div>
                     <div style={{ ...styles.softStat, padding: 14 }}>
-                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: textSoft }}>Current mapped live ads</div>
-                      <div style={{ marginTop: 8, fontSize: 24, fontWeight: 900, color: accent }}>{formatUsdFromTzs(profitCenterSummary.liveObservedAdsTzs)}</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", color: textSoft }}>Total ads spent</div>
+                      <div style={{ marginTop: 8, fontSize: 24, fontWeight: 900, color: amber }}>{formatUsdFromTzs(profitCenterSummary.adsSpendTzs)}</div>
+                      <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>Injected once in the profit center, not counted twice.</div>
                     </div>
                   </div>
                   <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
