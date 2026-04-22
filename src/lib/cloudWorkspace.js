@@ -1,4 +1,5 @@
 import { supabase, supabaseEnabled, supabaseWorkspaceId } from "./supabaseClient";
+import { hasMeaningfulWorkspaceData } from "./appLogic";
 
 async function ensureCloudWorkspaceMembership(workspaceId = supabaseWorkspaceId) {
   if (!supabaseEnabled || !supabase) throw new Error("Supabase is not configured.");
@@ -113,6 +114,9 @@ export async function saveCloudWorkspace(state, { workspaceId = supabaseWorkspac
   await ensureCloudWorkspaceMembership(workspaceId);
 
   const current = await loadCloudWorkspace(workspaceId);
+  if (!hasMeaningfulWorkspaceData(state) && hasMeaningfulWorkspaceData(current.state || {})) {
+    throw new Error("Refusing to overwrite a non-empty cloud workspace with an empty snapshot.");
+  }
   const nextVersion = Math.max(Number(current.version || 0) + 1, Date.now());
   const payload = {
     name: "Main Workspace",
