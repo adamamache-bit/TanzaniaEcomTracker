@@ -2453,9 +2453,7 @@ export default function App() {
         };
       }).sort((a, b) => String(b.bucket || "").localeCompare(String(a.bucket || "")));
 
-      const cumulativeTrackedSpendTzs =
-        baselineTotalSpendTzs +
-        dailySpendSnapshots.reduce((sum, entry) => sum + Number(entry.newSpendTzs || 0), 0);
+      const cumulativeTrackedSpendTzs = totalSpendTzs;
       const lastDailySpendTzs = dailyPayloads.length
         ? Number(dailySpendSnapshots.find((entry) => entry.bucket === todayBucket)?.newSpendTzs || 0)
         : 0;
@@ -4418,7 +4416,12 @@ export default function App() {
 
     const trackedAdsTotalTzs = baseRows.reduce((sum, row) => sum + Number(row.liveObservedAdsTzs || 0), 0);
     const manualAdsTotalTzs = baseRows.reduce((sum, row) => sum + Number(row.manualAdsUsedTzs || 0), 0);
-    const metaAdsTotalTzs = Number(metaAdsState.cumulativeTrackedSpendTzs || 0);
+    const metaAdsTotalTzs = Number(
+      metaAdsState.lastSyncSummary?.accountTotalSpendTzs ||
+      metaAdsState.lifetimeSpendTzs ||
+      metaAdsState.cumulativeTrackedSpendTzs ||
+      0
+    );
 
     let adsSpendTzs = 0;
     let adsSourceLabel = "No ads input yet";
@@ -4473,7 +4476,7 @@ export default function App() {
         };
       })
       .sort((a, b) => Number(b.balanceTzs || 0) - Number(a.balanceTzs || 0));
-  }, [metaAdsState.cumulativeTrackedSpendTzs, productDashboard, situationData.adInputs]);
+  }, [metaAdsState.cumulativeTrackedSpendTzs, metaAdsState.lastSyncSummary?.accountTotalSpendTzs, metaAdsState.lifetimeSpendTzs, productDashboard, situationData.adInputs]);
 
   const auditRows = useMemo(() => {
     return customers
@@ -6184,7 +6187,7 @@ export default function App() {
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Boxes size={18} />} title="Catalog size" value={productsCatalogSummary.totalProducts} sub="Products ready in the catalog" />
                 <KpiCard icon={<Archive size={18} />} title="Total units" value={productsCatalogSummary.totalUnits} sub="Imported stock volume" />
-                <KpiCard icon={<Wallet size={18} />} title="Import budget" value={formatTZS(productsCatalogSummary.totalImportBudgetTzs)} sub="Purchase + shipping + charges" valueColor={accent} />
+                <KpiCard icon={<Wallet size={18} />} title="Import budget" value={`${formatTZS(productsCatalogSummary.totalImportBudgetTzs)} | ${formatUsdFromTzs(productsCatalogSummary.totalImportBudgetTzs)}`} sub="Purchase + shipping + charges in TSh and USD" valueColor={accent} />
                 <KpiCard icon={<TrendingUp size={18} />} title="Top score" value={`${productsCatalogSummary.topScore}/100`} sub={bestProduct ? bestProduct.name : "No highlighted product"} valueColor={green} />
               </div>
 
