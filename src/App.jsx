@@ -2368,9 +2368,30 @@ export default function App() {
     const totalAmount = Number(totalPayload?.spend || 0);
     const totalSpendTzs = metaCurrencyIsTzs ? totalAmount : totalAmount * USD_TO_TZS;
     const capturedAt = totalPayload?.capturedAt || new Date().toISOString();
-    const dailyPayload = shouldFetchDailySpend ? await fetchMetaDailySpendPayload(todayBucket) : null;
-    const dailyAmount = Number(dailyPayload?.spend || 0);
-    const dailySpendTzs = metaCurrencyIsTzs ? dailyAmount : dailyAmount * USD_TO_TZS;
+    const buildMissingBuckets = (fromBucket, existingSnapshots) => {
+      if (!fromBucket || todayBucket <= String(fromBucket)) return [];
+      const snapshotBuckets = new Set((existingSnapshots || []).map((entry) => String(entry.bucket || "")));
+      const buckets = [];
+      let cursor = parseDateInput(String(fromBucket));
+      const end = parseDateInput(todayBucket);
+      if (!cursor || !end) return [];
+      cursor.setDate(cursor.getDate() + 1);
+      while (cursor <= end) {
+        const bucket = formatDateInput(cursor);
+        if (!snapshotBuckets.has(bucket)) {
+          buckets.push(bucket);
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return buckets;
+    };
+
+    const missingBuckets = hasBaseline ? buildMissingBuckets(metaAdsState.baselineSpendBucket, metaAdsState.dailySpendSnapshots) : [];
+    const dailyPayloads = [];
+    for (const bucket of missingBuckets) {
+      const payload = await fetchMetaDailySpendPayload(bucket);
+      dailyPayloads.push(payload);
+    }
 
     setMetaAdsState((prev) => {
       const prevHasBaseline = Number(prev.baselineTotalSpendTzs || 0) > 0 || Boolean(prev.baselineSpendBucket);
@@ -2390,26 +2411,54 @@ export default function App() {
       const baselineTotalSpendTzs = prevHasBaseline ? Number(prev.baselineTotalSpendTzs || 0) : totalSpendTzs;
       const baselineSpendBucket = prevHasBaseline ? prev.baselineSpendBucket || todayBucket : todayBucket;
       let dailySpendSnapshots = Array.isArray(prev.dailySpendSnapshots) ? [...prev.dailySpendSnapshots] : [];
+      if (prevHasBaseline) {
+        const prevMissingBuckets = buildMissingBuckets(baselineSpendBucket, dailySpendSnapshots);
+        const payloadMap = new Map(
+          dailyPayloads.map((payload) => {
+            const bucket = String(payload?.date || "");
+            const amount = Number(payload?.spend || 0);
+            const spendTzs = metaCurrencyIsTzs ? amount : amount * USD_TO_TZS;
+            return [
+              bucket,
+              {
+                id: `meta-daily-${bucket}`,
+                bucket,
+                totalSpendTzs: null,
+                newSpendTzs: Math.max(0, spendTzs),
+                capturedAt: payload?.capturedAt || capturedAt,
+                source: "meta_daily",
+              },
+            ];
+          })
+        );
 
-      if (prevHasBaseline && todayBucket > String(baselineSpendBucket || "") && !prevHasTodaySnapshot) {
         dailySpendSnapshots = [
-          {
-            id: `meta-daily-${todayBucket}`,
-            bucket: todayBucket,
-            totalSpendTzs,
-            newSpendTzs: Math.max(0, dailySpendTzs),
-            capturedAt: dailyPayload?.capturedAt || capturedAt,
-            source: "meta_daily",
-          },
+          ...prevMissingBuckets
+            .map((bucket) => payloadMap.get(bucket))
+            .filter(Boolean),
           ...dailySpendSnapshots,
         ]
           .filter((entry, index, array) => array.findIndex((candidate) => candidate.bucket === entry.bucket) === index)
+          .sort((a, b) => String(b.bucket || "").localeCompare(String(a.bucket || "")))
           .slice(0, 120);
       }
+
+      const sortedAscendingSnapshots = [...dailySpendSnapshots].sort((a, b) => String(a.bucket || "").localeCompare(String(b.bucket || "")));
+      let runningTotalTzs = baselineTotalSpendTzs;
+      dailySpendSnapshots = sortedAscendingSnapshots.map((entry) => {
+        runningTotalTzs += Number(entry.newSpendTzs || 0);
+        return {
+          ...entry,
+          totalSpendTzs: runningTotalTzs,
+        };
+      }).sort((a, b) => String(b.bucket || "").localeCompare(String(a.bucket || "")));
 
       const cumulativeTrackedSpendTzs =
         baselineTotalSpendTzs +
         dailySpendSnapshots.reduce((sum, entry) => sum + Number(entry.newSpendTzs || 0), 0);
+      const lastDailySpendTzs = dailyPayloads.length
+        ? Number(dailySpendSnapshots.find((entry) => entry.bucket === todayBucket)?.newSpendTzs || 0)
+        : 0;
 
       return {
         ...prev,
@@ -2425,7 +2474,7 @@ export default function App() {
               ...prev.lastSyncSummary,
               accountTotalSpendTzs: totalSpendTzs,
               trackedCumulativeSpendTzs: cumulativeTrackedSpendTzs,
-              lastDailySpendTzs: Math.max(0, dailySpendTzs),
+              lastDailySpendTzs,
             }
           : prev.lastSyncSummary,
       };
@@ -2480,6 +2529,28 @@ export default function App() {
       setMetaAdsLoading((prev) => ({ ...prev, apply: false }));
     }
   };
+
+  useEffect(() => {
+    if (!metaAdsState.accessToken.trim() || !metaAdsState.accountId) return;
+    if (metaAdsState.autoSync) return;
+    if (metaAdsState.lastSyncAt || metaAdsState.baselineSpendBucket || Number(metaAdsState.cumulativeTrackedSpendTzs || 0) > 0) return;
+
+    setMetaAdsState((prev) => {
+      if (!prev.accessToken.trim() || !prev.accountId || prev.autoSync) return prev;
+      if (prev.lastSyncAt || prev.baselineSpendBucket || Number(prev.cumulativeTrackedSpendTzs || 0) > 0) return prev;
+      return {
+        ...prev,
+        autoSync: true,
+      };
+    });
+  }, [
+    metaAdsState.accessToken,
+    metaAdsState.accountId,
+    metaAdsState.autoSync,
+    metaAdsState.baselineSpendBucket,
+    metaAdsState.cumulativeTrackedSpendTzs,
+    metaAdsState.lastSyncAt,
+  ]);
 
   useEffect(() => {
     if (!metaAdsState.accessToken.trim() || !metaAdsState.accountId) return undefined;
