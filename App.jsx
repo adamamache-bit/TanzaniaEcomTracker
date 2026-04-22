@@ -763,6 +763,7 @@ export default function App() {
     items: [],
     notice: "",
   });
+  const [cloudBackupOpen, setCloudBackupOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [customerListFilters, setCustomerListFilters] = useState({
     search: "",
@@ -997,7 +998,10 @@ export default function App() {
         const shouldKeepLocal = !remoteHasData && localHasData;
 
         if (cloudMode) {
-          if (shouldKeepLocal) {
+          if (remoteHasData) {
+            applySharedStateSnapshot(remoteState);
+            lastSharedPayloadRef.current = JSON.stringify(remoteState);
+          } else if (shouldKeepLocal) {
             lastSharedPayloadRef.current = "";
           } else if (browserBackupSnapshot) {
             applySharedStateSnapshot(browserBackupSnapshot);
@@ -1097,7 +1101,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const payload = {
+    const nextSnapshot = {
       products,
       tracking,
       customers,
@@ -1105,17 +1109,26 @@ export default function App() {
       situationData,
       metaAdsState,
       importMeta,
+    };
+    const nextSnapshotHasData = hasMeaningfulWorkspaceData(nextSnapshot);
+    const existingBrowserBackup = readLocalWorkspaceSnapshotFromStorage();
+    if (!nextSnapshotHasData && existingBrowserBackup) {
+      return;
+    }
+
+    const payload = {
+      ...nextSnapshot,
       exportedAt: new Date().toISOString(),
       version: 1,
     };
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ products, tracking, customers, serviceForm, situationData, metaAdsState, importMeta }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSnapshot));
     localStorage.setItem(AUTO_BACKUP_KEY, JSON.stringify(payload));
 
     const now = new Date().toISOString();
     localStorage.setItem(AUTO_BACKUP_META_KEY, JSON.stringify({ lastAutoBackupAt: now }));
     setLastAutoBackupAt(now);
-  }, [products, tracking, customers, serviceForm, situationData, metaAdsState, importMeta]);
+  }, [customers, importMeta, metaAdsState, products, readBrowserBackupSnapshot, serviceForm, situationData, tracking]);
 
   useEffect(() => {
     const bucket = getDayBucket(currentTime);
@@ -4967,60 +4980,88 @@ export default function App() {
                             Sign out
                           </button>
                         </div>
-                        <div style={{ ...styles.card, padding: 14, borderRadius: 16, boxShadow: "none", background: "linear-gradient(180deg, rgba(246,249,255,0.96), rgba(255,255,255,0.98))" }}>
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                            <div>
-                              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: accent }}>Cloud restore points</div>
-                              <div style={{ marginTop: 6, fontWeight: 800, fontSize: 16 }}>
-                                {cloudBackupState.available ? `${cloudBackupState.items.length} recent backup${cloudBackupState.items.length > 1 ? "s" : ""}` : "Restore history not enabled yet"}
+                        <div
+                          style={{
+                            borderRadius: 14,
+                            border: `1px solid ${cardBorder}`,
+                            background: "rgba(248,250,255,0.76)",
+                            padding: "10px 12px",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                            <div style={{ minWidth: 0, display: "grid", gap: 2 }}>
+                              <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.42, textTransform: "uppercase", color: accent }}>
+                                Restore points
+                              </div>
+                              <div style={{ color: textSoft, fontSize: 13, lineHeight: 1.45 }}>
+                                {cloudBackupState.available
+                                  ? `${formatInteger(cloudBackupState.items.length)} backup${cloudBackupState.items.length > 1 ? "s" : ""}${
+                                      cloudBackupState.items[0]?.created_at ? ` | latest ${new Date(cloudBackupState.items[0].created_at).toLocaleString()}` : ""
+                                    }`
+                                  : "Restore history not enabled yet"}
                               </div>
                             </div>
-                            <button style={styles.btnSecondary} onClick={() => void refreshCloudBackups()} disabled={cloudBackupState.loading || Boolean(cloudBackupState.restoringId)}>
-                              {cloudBackupState.loading ? "Loading..." : "Refresh backups"}
-                            </button>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                              <button
+                                style={{ ...styles.btnSecondary, padding: "10px 12px", minHeight: 0, borderRadius: 12, fontSize: 13 }}
+                                onClick={() => void refreshCloudBackups()}
+                                disabled={cloudBackupState.loading || Boolean(cloudBackupState.restoringId)}
+                              >
+                                {cloudBackupState.loading ? "Loading..." : "Refresh"}
+                              </button>
+                              {cloudBackupState.available && cloudBackupState.items.length ? (
+                                <button
+                                  style={{ ...styles.btnSecondary, padding: "10px 12px", minHeight: 0, borderRadius: 12, fontSize: 13 }}
+                                  onClick={() => setCloudBackupOpen((prev) => !prev)}
+                                  disabled={Boolean(cloudBackupState.restoringId)}
+                                >
+                                  {cloudBackupOpen ? "Hide" : "Show"}
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
                           {cloudBackupState.notice ? (
-                            <div style={{ color: cloudBackupState.available ? textSoft : amber, marginTop: 10, lineHeight: 1.5 }}>{cloudBackupState.notice}</div>
+                            <div style={{ color: cloudBackupState.available ? textSoft : amber, marginTop: 8, fontSize: 12, lineHeight: 1.45 }}>
+                              {cloudBackupState.notice}
+                            </div>
                           ) : null}
-                          {cloudBackupState.available && cloudBackupState.items.length ? (
-                            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-                              {cloudBackupState.items.map((backup) => {
+                          {cloudBackupOpen && cloudBackupState.available && cloudBackupState.items.length ? (
+                            <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                              {cloudBackupState.items.slice(0, 5).map((backup) => {
                                 const summary = backup.summary || {};
                                 return (
                                   <div
                                     key={backup.id}
                                     style={{
                                       display: "grid",
-                                      gridTemplateColumns: responsiveColumns("minmax(0, 1fr) 150px", "1fr", "1fr"),
-                                      gap: 10,
+                                      gridTemplateColumns: responsiveColumns("minmax(0, 1fr) 112px", "1fr 110px", "1fr"),
+                                      gap: 8,
                                       alignItems: "center",
-                                      padding: "12px 14px",
-                                      borderRadius: 14,
+                                      padding: "8px 10px",
+                                      borderRadius: 12,
                                       border: `1px solid ${cardBorder}`,
-                                      background: "rgba(255,255,255,0.92)",
+                                      background: "rgba(255,255,255,0.82)",
                                     }}
                                   >
                                     <div style={{ minWidth: 0 }}>
-                                      <div style={{ fontWeight: 800 }}>
+                                      <div style={{ fontWeight: 800, fontSize: 13 }}>
                                         {backup.created_at ? new Date(backup.created_at).toLocaleString() : `Backup #${backup.id}`}
                                       </div>
-                                      <div style={{ color: textSoft, marginTop: 4, fontSize: 13, lineHeight: 1.5 }}>
-                                        Reason: {backup.reason || "autosave"} | Version {formatInteger(backup.workspace_version || 0)} | {formatInteger(summary.products || 0)} products | {formatInteger(summary.customers || 0)} orders | {formatInteger(summary.tracking || 0)} tracking rows
+                                      <div style={{ color: textSoft, marginTop: 2, fontSize: 12, lineHeight: 1.4 }}>
+                                        V{formatInteger(backup.workspace_version || 0)} | {formatInteger(summary.products || 0)} p | {formatInteger(summary.customers || 0)} cmd | {formatInteger(summary.tracking || 0)} tr
                                       </div>
                                     </div>
                                     <button
-                                      style={styles.btnSecondary}
+                                      style={{ ...styles.btnSecondary, padding: "9px 12px", minHeight: 0, borderRadius: 12, fontSize: 13 }}
                                       onClick={() => void restoreCloudBackup(backup.id)}
                                       disabled={cloudBackupState.loading || cloudBackupState.restoringId === backup.id}
                                     >
-                                      {cloudBackupState.restoringId === backup.id ? "Restoring..." : "Restore"}
+                                      {cloudBackupState.restoringId === backup.id ? "..." : "Restore"}
                                     </button>
                                   </div>
                                 );
                               })}
                             </div>
-                          ) : cloudBackupState.available && !cloudBackupState.loading ? (
-                            <div style={{ color: textSoft, marginTop: 12 }}>No restore point saved yet. The next cloud save will create the first one automatically.</div>
                           ) : null}
                         </div>
                       </div>
