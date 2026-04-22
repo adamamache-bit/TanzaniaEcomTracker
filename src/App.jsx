@@ -2337,31 +2337,37 @@ export default function App() {
         return prev;
       }
 
-      const previousTotal = Number(prev.lifetimeSpendTzs || 0);
-      const newSpendTzs = previousTotal > 0 ? Math.max(0, totalSpendTzs - previousTotal) : 0;
       const existing = Array.isArray(prev.dailySpendSnapshots) ? prev.dailySpendSnapshots.filter((entry) => entry.bucket !== todayBucket) : [];
+      const previousReferenceTotalTzs =
+        existing.length > 0 ? Number(existing[0]?.totalSpendTzs || existing[0]?.newSpendTzs || 0) : 0;
+      const newSpendTzs = existing.length > 0 ? Math.max(0, totalSpendTzs - previousReferenceTotalTzs) : totalSpendTzs;
+      const dailySpendSnapshots = [
+        {
+          id: `meta-daily-${todayBucket}`,
+          bucket: todayBucket,
+          totalSpendTzs,
+          newSpendTzs,
+          capturedAt,
+          source: "meta_maximum",
+        },
+        ...existing,
+      ].slice(0, 120);
+      const cumulativeTrackedSpendTzs = dailySpendSnapshots.reduce((sum, entry) => sum + Number(entry.newSpendTzs || 0), 0);
 
       return {
         ...prev,
         lifetimeSpendTzs: totalSpendTzs,
         lastLifetimeSpendSyncDate: todayBucket,
         lifetimeSpendCapturedAt: capturedAt,
-        dailySpendSnapshots: [
-          {
-            id: `meta-daily-${Date.now()}`,
-            bucket: todayBucket,
-            totalSpendTzs,
-            newSpendTzs,
-            capturedAt,
-            source: "meta_maximum",
-          },
-          ...existing,
-        ].slice(0, 120),
+        cumulativeTrackedSpendTzs,
+        dailySpendSnapshots,
         lastSyncSummary: prev.lastSyncSummary
           ? {
               ...prev.lastSyncSummary,
               accountTotalSpendTzs: totalSpendTzs,
-        }
+              trackedCumulativeSpendTzs: cumulativeTrackedSpendTzs,
+              lastDailySpendTzs: newSpendTzs,
+            }
           : prev.lastSyncSummary,
       };
     });
@@ -3907,22 +3913,26 @@ export default function App() {
         ? productEconomics.reduce((sum, product) => sum + Number(product.averageLeadCostTzs || 0), 0) /
           productEconomics.filter((product) => Number(product.averageLeadCostTzs || 0) > 0).length
         : 0;
-    const detectedChargesTzs = purchaseBudgetTzs + importChargesTzs + configuredAdsUsedTzs + localDeliveryTzs + fixedChargesTzs;
+    const metaTrackedAdsTzs = Number(metaAdsState.cumulativeTrackedSpendTzs || 0);
+    const effectiveAdsSpendTzs = metaTrackedAdsTzs > 0 ? metaTrackedAdsTzs : configuredAdsUsedTzs;
+    const detectedChargesTzs = purchaseBudgetTzs + importChargesTzs + effectiveAdsSpendTzs + localDeliveryTzs + fixedChargesTzs;
 
     return {
       salariesTotalTzs,
       manualFixedChargesTzs,
       purchaseBudgetTzs,
       importChargesTzs,
-      adSpendTzs: configuredAdsUsedTzs,
+      adSpendTzs: effectiveAdsSpendTzs,
       localDeliveryTzs,
       fixedChargesTzs,
       detectedChargesTzs,
       productEconomics,
       configuredAdsUsedTzs,
+      metaTrackedAdsTzs,
+      effectiveAdsSpendTzs,
       configuredAverageLeadCostTzs,
     };
-  }, [liveAutomationSummary.localDeliveryCostTzs, products, situationData]);
+  }, [liveAutomationSummary.localDeliveryCostTzs, metaAdsState.cumulativeTrackedSpendTzs, products, situationData]);
 
   const weeklyProductProfitRows = useMemo(() => {
     const grouped = {};
@@ -4361,7 +4371,10 @@ export default function App() {
       { revenueTzs: 0, deliveredCostTzs: 0, productTrackedProfitTzs: 0, productTrackedAdsTzs: 0, liveObservedAdsTzs: 0, fixedChargesTzs: 0 }
     );
 
-    const adsSpendTzs = Number(metaAdsState.lifetimeSpendTzs || 0) > 0 ? Number(metaAdsState.lifetimeSpendTzs || 0) : Number(totals.productTrackedAdsTzs || 0);
+    const adsSpendTzs =
+      Number(metaAdsState.cumulativeTrackedSpendTzs || 0) > 0
+        ? Number(metaAdsState.cumulativeTrackedSpendTzs || 0)
+        : Number(totals.productTrackedAdsTzs || 0);
     const profitTzs = Number(totals.revenueTzs || 0) - Number(totals.deliveredCostTzs || 0) - adsSpendTzs;
     const netAfterFixedTzs = profitTzs - Number(totals.fixedChargesTzs || 0);
 
@@ -4374,7 +4387,7 @@ export default function App() {
       topProduct: profitCenterRows[0] || null,
       lastHourlyAdsSnapshot: metaAdsState.dailySpendSnapshots?.[0] || null,
     };
-  }, [metaAdsState.dailySpendSnapshots, metaAdsState.lifetimeSpendTzs, profitCenterRows]);
+  }, [metaAdsState.cumulativeTrackedSpendTzs, metaAdsState.dailySpendSnapshots, profitCenterRows]);
 
   const auditSummary = useMemo(() => {
     return {
@@ -7584,7 +7597,19 @@ export default function App() {
                 <KpiCard icon={<Wallet size={18} />} title="Detected Charges" value={formatUsdFromTzs(situationsSummary.detectedChargesTzs)} sub="Products, import, ads, salaries and fixed charges" valueColor={red} />
                 <KpiCard icon={<Users size={18} />} title="Salaries" value={formatUsdFromTzs(situationsSummary.salariesTotalTzs)} sub="Employee payroll included in fixed charges" />
                 <KpiCard icon={<Archive size={18} />} title="Fixed Charges" value={formatUsdFromTzs(situationsSummary.fixedChargesTzs)} sub="Salaries + manual fixed charges" valueColor={amber} />
-                <KpiCard icon={<TrendingUp size={18} />} title="Ads Used" value={formatUsdFromTzs(situationsSummary.configuredAdsUsedTzs)} sub={situationsSummary.configuredAverageLeadCostTzs > 0 ? `Average ad cost ${formatUsdFromTzs(situationsSummary.configuredAverageLeadCostTzs)} per lead` : "Configure average ad cost and incoming leads per product"} valueColor={accent} />
+                <KpiCard
+                  icon={<TrendingUp size={18} />}
+                  title="Ads Used"
+                  value={formatUsdFromTzs(situationsSummary.adSpendTzs)}
+                  sub={
+                    situationsSummary.metaTrackedAdsTzs > 0
+                      ? "Meta cumulative total automatically included in charges"
+                      : situationsSummary.configuredAverageLeadCostTzs > 0
+                        ? `Average ad cost ${formatUsdFromTzs(situationsSummary.configuredAverageLeadCostTzs)} per lead`
+                        : "Configure average ad cost and incoming leads per product"
+                  }
+                  valueColor={accent}
+                />
               </div>
 
               <div style={{ ...styles.card, padding: 22 }}>
@@ -7601,7 +7626,12 @@ export default function App() {
                 <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 14 }}>
                   <MiniStat label="Product Purchase" value={formatUsdFromTzs(situationsSummary.purchaseBudgetTzs)} tone="amber" sub="Detected from product buy price x imported stock" />
                   <MiniStat label="Import Charges" value={formatUsdFromTzs(situationsSummary.importChargesTzs)} tone="blue" sub="Shipping total + other charges" />
-                  <MiniStat label="Ad Spend" value={formatUsdFromTzs(situationsSummary.adSpendTzs)} tone="green" sub="Configured from ad cost x incoming leads" />
+                  <MiniStat
+                    label="Ad Spend"
+                    value={formatUsdFromTzs(situationsSummary.adSpendTzs)}
+                    tone="green"
+                    sub={situationsSummary.metaTrackedAdsTzs > 0 ? "Meta daily cumulative total included automatically" : "Configured from ad cost x incoming leads"}
+                  />
                   <MiniStat label="Local Delivery" value={formatUsdFromTzs(situationsSummary.localDeliveryTzs)} tone="blue" sub="Detected delivered orders cost" />
                   <MiniStat label="Manual Fixed" value={formatUsdFromTzs(situationsSummary.manualFixedChargesTzs)} tone="amber" sub="Rent, tools, subscriptions, utilities..." />
                   <MiniStat label="Payroll" value={formatUsdFromTzs(situationsSummary.salariesTotalTzs)} tone="green" sub="Team salaries included in fixed charges" />
