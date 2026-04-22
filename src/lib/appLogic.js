@@ -605,11 +605,7 @@ export function sanitizeMetaAdsState(value) {
         })
     : defaults.dailySpendSnapshots;
 
-  const snapshotCumulativeSpendTzs = dailySpendSnapshots.reduce((sum, entry) => sum + Number(entry.newSpendTzs || 0), 0);
-  const fallbackCumulativeSpendTzs =
-    snapshotCumulativeSpendTzs > 0
-      ? snapshotCumulativeSpendTzs
-      : Math.max(0, parseLooseNumber(value?.lifetimeSpendTzs));
+  const fallbackCumulativeSpendTzs = Math.max(0, parseLooseNumber(value?.lifetimeSpendTzs));
   const explicitCumulativeTrackedSpendTzs = Math.max(0, parseLooseNumber(value?.cumulativeTrackedSpendTzs));
 
   return {
