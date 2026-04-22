@@ -4858,23 +4858,12 @@ export default function App() {
             </div>
           </div>
 
-          <SidebarItem active={activePage === "executive"} onClick={() => setActivePage("executive")} icon={<Wallet size={18} />} label="Executive" />
           <SidebarItem active={activePage === "dashboard"} onClick={() => setActivePage("dashboard")} icon={<BarChart3 size={18} />} label="Dashboard" />
-          <SidebarItem active={activePage === "multiDashboard"} onClick={() => setActivePage("multiDashboard")} icon={<LayoutGrid size={18} />} label="Expedition Product" />
-          <SidebarItem active={activePage === "products"} onClick={() => setActivePage("products")} icon={<Boxes size={18} />} label="Products" />
-          <SidebarItem active={activePage === "stock"} onClick={() => setActivePage("stock")} icon={<Archive size={18} />} label="Gestion de stock" />
-          <SidebarItem active={activePage === "tracking"} onClick={() => setActivePage("tracking")} icon={<ClipboardList size={18} />} label="Tracking" />
-          <SidebarItem active={activePage === "customersOrders"} onClick={() => setActivePage("customersOrders")} icon={<Users size={18} />} label="Clients & Commandes" />
-          <SidebarItem active={activePage === "shipping"} onClick={() => setActivePage("shipping")} icon={<ShoppingBag size={18} />} label="Shipping" />
-          <SidebarItem active={activePage === "situations"} onClick={() => setActivePage("situations")} icon={<Wallet size={18} />} label="Situations" />
-          <SidebarItem active={activePage === "serviceSum"} onClick={() => setActivePage("serviceSum")} icon={<Calculator size={18} />} label="Service Sum" />
-          <SidebarItem active={activePage === "profitCenter"} onClick={() => setActivePage("profitCenter")} icon={<TrendingUp size={18} />} label="Profit Center" />
-          <SidebarItem active={activePage === "scaling"} onClick={() => setActivePage("scaling")} icon={<Rocket size={18} />} label="Scaling" />
-          <SidebarItem active={activePage === "taskCenter"} onClick={() => setActivePage("taskCenter")} icon={<ClipboardList size={18} />} label="Task Center" />
-          <SidebarItem active={activePage === "calendar"} onClick={() => setActivePage("calendar")} icon={<CalendarDays size={18} />} label="Business Calendar" />
-          <SidebarItem active={activePage === "team"} onClick={() => setActivePage("team")} icon={<Users size={18} />} label="Team" />
-          <SidebarItem active={activePage === "audit"} onClick={() => setActivePage("audit")} icon={<LayoutGrid size={18} />} label="Audit" />
-          <SidebarItem active={activePage === "alerts"} onClick={() => setActivePage("alerts")} icon={<AlertTriangle size={18} />} label="Alerts" />
+          <SidebarItem active={["ordersHub", "customersOrders", "shipping"].includes(activePage)} onClick={() => setActivePage("ordersHub")} icon={<Users size={18} />} label="Commandes" />
+          <SidebarItem active={["catalogHub", "multiDashboard", "products", "stock"].includes(activePage)} onClick={() => setActivePage("catalogHub")} icon={<Boxes size={18} />} label="Produits" />
+          <SidebarItem active={["financeHub", "tracking", "serviceSum", "situations", "profitCenter"].includes(activePage)} onClick={() => setActivePage("financeHub")} icon={<Calculator size={18} />} label="Finance" />
+          <SidebarItem active={["performanceHub", "executive", "scaling"].includes(activePage)} onClick={() => setActivePage("performanceHub")} icon={<Rocket size={18} />} label="Performance" />
+          <SidebarItem active={["operationsHub", "taskCenter", "calendar", "team", "audit", "alerts"].includes(activePage)} onClick={() => setActivePage("operationsHub")} icon={<ClipboardList size={18} />} label="Operations" />
 
           <div style={{ ...styles.card, marginTop: 28, padding: 18, background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(240,247,255,0.8))" }}>
             <div style={{ ...styles.sectionEyebrow, color: textSoft }}>Top performer</div>
@@ -5135,7 +5124,7 @@ export default function App() {
             </div>
           ) : null}
 
-          {activePage === "dashboard" && (
+{activePage === "dashboard" && (
             <>
               {pendingDubaiNotifications.length > 0 && (
                 <div
@@ -5804,7 +5793,7 @@ export default function App() {
             </>
           )}
 
-          {activePage === "multiDashboard" && (
+{["multiDashboard", "catalogHub"].includes(activePage) && (
             <div style={{ ...styles.card, padding: 22 }}>
               <div style={styles.sectionHeader}>
                 <div>
@@ -5940,7 +5929,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "products" && (
+{["products", "catalogHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Boxes size={18} />} title="Catalog size" value={productsCatalogSummary.totalProducts} sub="Products ready in the catalog" />
@@ -6164,7 +6153,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "stock" && (
+{["stock", "catalogHub"].includes(activePage) && (
             <div style={{ ...styles.card, padding: 22 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(6, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 16, marginBottom: 16 }}>
                 <KpiCard icon={<Archive size={18} />} title="Products tracked" value={stockForecastRows.length} sub="Products with live stock forecast" />
@@ -6220,7 +6209,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "customersOrders" && (
+{["customersOrders", "ordersHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Users size={18} />} title="Total Orders" value={customersDashboard.totalOrders} sub="All customer orders" />
@@ -6754,7 +6743,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "shipping" && (
+{["shipping", "ordersHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <input
                 ref={shippingImportInputRef}
@@ -7091,7 +7080,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "tracking" && (
+{["tracking", "financeHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<ClipboardList size={18} />} title="Tracking rows" value={trackingSummary.rows} sub="Manual and Meta-synced spend rows" />
@@ -7445,7 +7434,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "serviceSum" && (
+{["serviceSum", "financeHub"].includes(activePage) && (
             <div style={{ ...styles.card, padding: 22 }}>
               <div style={styles.sectionHeader}>
                 <div>
@@ -7529,7 +7518,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "situations" && (
+{["situations", "financeHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Wallet size={18} />} title="Detected Charges" value={formatUsdFromTzs(situationsSummary.detectedChargesTzs)} sub="Products, import, ads, salaries and fixed charges" valueColor={red} />
@@ -7790,7 +7779,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "executive" && (
+{["executive", "performanceHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<ClipboardList size={18} />} title="Total Leads" value={customersDashboard.totalOrders} sub={`${Math.round(customersDashboard.confirmationRate)}% confirmation rate`} />
@@ -7887,7 +7876,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "profitCenter" && (
+{["profitCenter", "financeHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(6, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Wallet size={18} />} title="Revenue" value={formatUsdFromTzs(profitCenterSummary.revenueTzs)} sub="All products combined" valueColor={green} />
@@ -7993,7 +7982,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "scaling" && (
+{["scaling", "performanceHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Rocket size={18} />} title="Ready To Scale" value={scalingSummary.ready.length} sub="Products with strong profit, ROAS, delivery and stock" valueColor={green} />
@@ -8077,7 +8066,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "taskCenter" && (
+{["taskCenter", "operationsHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 16 }}>
                 <KpiCard icon={<ClipboardList size={18} />} title="Open tasks" value={taskCenterData.length} sub="Business tasks generated from live data" />
@@ -8156,7 +8145,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "calendar" && (
+{["calendar", "operationsHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 16 }}>
                 <KpiCard icon={<CalendarDays size={18} />} title="Upcoming events" value={calendarEvents.length} sub="Operational reminders and projections" />
@@ -8193,7 +8182,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "team" && (
+{["team", "operationsHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Users size={18} />} title="Owners Active" value={teamScorecardRows.length} sub="People with assigned orders" />
@@ -8248,7 +8237,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "audit" && (
+{["audit", "operationsHub"].includes(activePage) && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<LayoutGrid size={18} />} title="Audit Entries" value={auditSummary.totalEntries} sub="Saved history rows" />
@@ -8317,7 +8306,7 @@ export default function App() {
             </div>
           )}
 
-          {activePage === "alerts" && (
+{["alerts", "operationsHub"].includes(activePage) && (
             <div style={{ ...styles.card, padding: 22 }}>
               <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>Alerts</div>
               <div style={{ color: textSoft }}>Section reservee pour tes alertes operationnelles et marketing.</div>
