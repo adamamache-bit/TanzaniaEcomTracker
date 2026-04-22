@@ -723,6 +723,28 @@ export default function App() {
       return getDefaultImportMeta();
     }
   });
+
+  useEffect(() => {
+    if (activePage === "ordersHub") {
+      setActivePage("customersOrders");
+      return;
+    }
+    if (activePage === "catalogHub") {
+      setActivePage("products");
+      return;
+    }
+    if (activePage === "financeHub") {
+      setActivePage("tracking");
+      return;
+    }
+    if (activePage === "performanceHub") {
+      setActivePage("executive");
+      return;
+    }
+    if (activePage === "operationsHub") {
+      setActivePage("taskCenter");
+    }
+  }, [activePage]);
   const [metaAdsState, setMetaAdsState] = useState(() => {
     if (supabaseEnabled) return sanitizeMetaAdsState(initialBrowserSnapshot?.metaAdsState || getDefaultMetaAdsState());
     try {
@@ -4859,11 +4881,13 @@ export default function App() {
           </div>
 
           <SidebarItem active={activePage === "dashboard"} onClick={() => setActivePage("dashboard")} icon={<BarChart3 size={18} />} label="Dashboard" />
-          <SidebarItem active={["ordersHub", "customersOrders", "shipping"].includes(activePage)} onClick={() => setActivePage("ordersHub")} icon={<Users size={18} />} label="Commandes" />
-          <SidebarItem active={["catalogHub", "multiDashboard", "products", "stock"].includes(activePage)} onClick={() => setActivePage("catalogHub")} icon={<Boxes size={18} />} label="Produits" />
-          <SidebarItem active={["financeHub", "tracking", "serviceSum", "situations", "profitCenter"].includes(activePage)} onClick={() => setActivePage("financeHub")} icon={<Calculator size={18} />} label="Finance" />
-          <SidebarItem active={["performanceHub", "executive", "scaling"].includes(activePage)} onClick={() => setActivePage("performanceHub")} icon={<Rocket size={18} />} label="Performance" />
-          <SidebarItem active={["operationsHub", "taskCenter", "calendar", "team", "audit", "alerts"].includes(activePage)} onClick={() => setActivePage("operationsHub")} icon={<ClipboardList size={18} />} label="Operations" />
+          <SidebarItem active={activePage === "customersOrders"} onClick={() => setActivePage("customersOrders")} icon={<Users size={18} />} label="List" />
+          <SidebarItem active={activePage === "shipping"} onClick={() => setActivePage("shipping")} icon={<ShoppingBag size={18} />} label="Shipping" />
+          <SidebarItem active={["products", "stock"].includes(activePage)} onClick={() => setActivePage("products")} icon={<Archive size={18} />} label="Stock" />
+          <SidebarItem active={activePage === "multiDashboard"} onClick={() => setActivePage("multiDashboard")} icon={<Boxes size={18} />} label="Approvisionnement" />
+          <SidebarItem active={["tracking", "serviceSum", "situations", "profitCenter"].includes(activePage)} onClick={() => setActivePage("tracking")} icon={<Calculator size={18} />} label="Finance" />
+          <SidebarItem active={["executive", "scaling"].includes(activePage)} onClick={() => setActivePage("executive")} icon={<Rocket size={18} />} label="Performance" />
+          <SidebarItem active={["taskCenter", "calendar", "team", "audit", "alerts"].includes(activePage)} onClick={() => setActivePage("taskCenter")} icon={<ClipboardList size={18} />} label="Operations" />
 
           <div style={{ ...styles.card, marginTop: 28, padding: 18, background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(240,247,255,0.8))" }}>
             <div style={{ ...styles.sectionEyebrow, color: textSoft }}>Top performer</div>
@@ -5793,21 +5817,24 @@ export default function App() {
             </>
           )}
 
-{["multiDashboard", "catalogHub"].includes(activePage) && (
+{activePage === "multiDashboard" && (
             <div style={{ ...styles.card, padding: 22 }}>
               <div style={styles.sectionHeader}>
                 <div>
-                  <div style={{ fontSize: 24, fontWeight: 900 }}>Expedition Product</div>
+                  <div style={{ fontSize: 24, fontWeight: 900 }}>Approvisionnement stock</div>
                   <div style={{ color: textSoft, marginTop: 6 }}>
                     {editingProductId
-                      ? "Modifiez les informations du produit puis enregistrez les changements."
-                      : "Ajoute les informations d'achat/import, puis sauvegarde. Le produit sera ajoute automatiquement dans Products."}
+                      ? "Modifiez les informations du lot fournisseur puis enregistrez les changements."
+                      : "Ajoutez ici les produits commandes chez le fournisseur. Une fois sauvegardes, ils rejoignent automatiquement le stock produit."}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   {editingProductId ? (
                     <button style={styles.btnSecondary} onClick={cancelEditingProduct}>Cancel Edit</button>
                   ) : null}
+                  <button style={styles.btnSecondary} onClick={() => setActivePage("products")}>
+                    Voir le stock
+                  </button>
                   <button style={styles.btnPrimary} onClick={saveExpeditionProduct}>
                     {editingProductId ? "Update Product" : "Save Product"}
                   </button>
@@ -5929,7 +5956,7 @@ export default function App() {
             </div>
           )}
 
-{["products", "catalogHub"].includes(activePage) && (
+{activePage === "products" && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Boxes size={18} />} title="Catalog size" value={productsCatalogSummary.totalProducts} sub="Products ready in the catalog" />
@@ -5942,8 +5969,8 @@ export default function App() {
                 <div style={styles.sectionHeader}>
                   <div>
                     <div style={styles.sectionEyebrow}>Catalog intelligence</div>
-                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Products</div>
-                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Tous les produits sauvegardés depuis Expedition Product apparaissent ici automatiquement, avec leur coût réel et leur profil logistique.</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Produits en stock</div>
+                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Tous les produits approvisionnés apparaissent ici automatiquement, avec leur coût réel, leur quantité et leur profil logistique.</div>
                   </div>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     {editingProductId ? (
@@ -5951,8 +5978,11 @@ export default function App() {
                         Cancel Edit
                       </button>
                     ) : null}
+                    <button style={styles.btnSecondary} onClick={() => setActivePage("stock")}>
+                      Gestion stock
+                    </button>
                     <button style={styles.btnPrimary} onClick={() => setActivePage("multiDashboard")}>
-                      Add New Product
+                      Nouveau lot stock
                     </button>
                     <div style={{ ...styles.badge, background: "rgba(29,95,208,0.08)", color: accent, border: "1px solid rgba(29,95,208,0.12)" }}>
                       Live catalog
@@ -6153,7 +6183,7 @@ export default function App() {
             </div>
           )}
 
-{["stock", "catalogHub"].includes(activePage) && (
+{activePage === "stock" && (
             <div style={{ ...styles.card, padding: 22 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(6, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 16, marginBottom: 16 }}>
                 <KpiCard icon={<Archive size={18} />} title="Products tracked" value={stockForecastRows.length} sub="Products with live stock forecast" />
@@ -6165,8 +6195,16 @@ export default function App() {
               </div>
               <div style={styles.sectionHeader}>
                 <div>
-                  <div style={{ fontSize: 22, fontWeight: 800 }}>📦 Gestion de stock</div>
-                  <div style={{ color: textSoft, marginTop: 6 }}>Chaque produit ajouté depuis Expedition Product entre automatiquement ici avec son stock initial basé sur Total Quantity. Le système calcule aussi le stock minimum et t'indique quand recommander.</div>
+                  <div style={{ fontSize: 22, fontWeight: 800 }}>Gestion de stock</div>
+                  <div style={{ color: textSoft, marginTop: 6 }}>Suivez ici le stock réel, les quantités réservées, les sorties en livraison et le moment idéal pour recommander.</div>
+                </div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button style={styles.btnSecondary} onClick={() => setActivePage("products")}>
+                    Produits en stock
+                  </button>
+                  <button style={styles.btnPrimary} onClick={() => setActivePage("multiDashboard")}>
+                    Approvisionnement
+                  </button>
                 </div>
               </div>
 
@@ -6209,7 +6247,7 @@ export default function App() {
             </div>
           )}
 
-{["customersOrders", "ordersHub"].includes(activePage) && (
+{activePage === "customersOrders" && (
             <div style={{ display: "grid", gap: 20 }}>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Users size={18} />} title="Total Orders" value={customersDashboard.totalOrders} sub="All customer orders" />
@@ -6743,7 +6781,7 @@ export default function App() {
             </div>
           )}
 
-{["shipping", "ordersHub"].includes(activePage) && (
+{activePage === "shipping" && (
             <div style={{ display: "grid", gap: 20 }}>
               <input
                 ref={shippingImportInputRef}
