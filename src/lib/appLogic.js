@@ -525,7 +525,9 @@ export function getDefaultMetaAdsState() {
     lastSyncAt: null,
     lastSyncSummary: null,
     dailySpendSnapshots: [],
+    cumulativeTrackedSpendTzs: 0,
     lifetimeSpendTzs: 0,
+    lifetimeSpendCapturedAt: null,
     lastLifetimeSpendSyncDate: null,
   };
 }
@@ -577,6 +579,37 @@ export function getDefaultCloudWorkspaceState() {
 
 export function sanitizeMetaAdsState(value) {
   const defaults = getDefaultMetaAdsState();
+  const dailySpendSnapshots = Array.isArray(value?.dailySpendSnapshots)
+    ? value.dailySpendSnapshots
+        .map((entry, index) => {
+          const bucket = String(entry?.bucket || entry?.date || "").trim();
+          const totalSpendTzs = Math.max(0, parseLooseNumber(entry?.totalSpendTzs ?? entry?.spendTzs));
+          const newSpendTzs = Math.max(0, parseLooseNumber(entry?.newSpendTzs ?? entry?.spendTzs));
+
+          return {
+            id: String(entry?.id || `meta-snapshot-${bucket || "entry"}-${index}`),
+            bucket,
+            totalSpendTzs,
+            newSpendTzs,
+            capturedAt: entry?.capturedAt || null,
+            source: String(entry?.source || "meta_maximum"),
+          };
+        })
+        .filter((entry) => entry.bucket)
+        .sort((a, b) => {
+          const bucketGap = String(b.bucket || "").localeCompare(String(a.bucket || ""));
+          if (bucketGap !== 0) return bucketGap;
+          return String(b.capturedAt || "").localeCompare(String(a.capturedAt || ""));
+        })
+    : defaults.dailySpendSnapshots;
+
+  const snapshotCumulativeSpendTzs = dailySpendSnapshots.reduce((sum, entry) => sum + Number(entry.newSpendTzs || 0), 0);
+  const fallbackCumulativeSpendTzs =
+    snapshotCumulativeSpendTzs > 0
+      ? snapshotCumulativeSpendTzs
+      : Math.max(0, parseLooseNumber(value?.lifetimeSpendTzs));
+  const explicitCumulativeTrackedSpendTzs = Math.max(0, parseLooseNumber(value?.cumulativeTrackedSpendTzs));
+
   return {
     accessToken: String(value?.accessToken || defaults.accessToken),
     accountId: String(value?.accountId || defaults.accountId),
@@ -588,15 +621,10 @@ export function sanitizeMetaAdsState(value) {
     autoSyncIntervalMinutes: Math.max(1, Number(value?.autoSyncIntervalMinutes || defaults.autoSyncIntervalMinutes)),
     lastSyncAt: value?.lastSyncAt || null,
     lastSyncSummary: value?.lastSyncSummary || null,
-    dailySpendSnapshots: Array.isArray(value?.dailySpendSnapshots)
-      ? value.dailySpendSnapshots.map((entry) => ({
-          id: String(entry?.id || `meta-snapshot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
-          date: String(entry?.date || ""),
-          spendTzs: Math.max(0, parseLooseNumber(entry?.spendTzs)),
-          capturedAt: entry?.capturedAt || null,
-        }))
-      : defaults.dailySpendSnapshots,
+    dailySpendSnapshots,
+    cumulativeTrackedSpendTzs: explicitCumulativeTrackedSpendTzs > 0 ? explicitCumulativeTrackedSpendTzs : fallbackCumulativeSpendTzs,
     lifetimeSpendTzs: Math.max(0, parseLooseNumber(value?.lifetimeSpendTzs)),
+    lifetimeSpendCapturedAt: value?.lifetimeSpendCapturedAt || null,
     lastLifetimeSpendSyncDate: value?.lastLifetimeSpendSyncDate || null,
   };
 }
