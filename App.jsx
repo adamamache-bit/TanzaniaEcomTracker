@@ -123,6 +123,44 @@ const AUTO_BACKUP_KEY = "tanzania-ecom-tracker-auto-backup-v1";
 const AUTO_BACKUP_META_KEY = "tanzania-ecom-tracker-auto-backup-meta-v1";
 const IMPORT_META_KEY = "tanzania-ecom-tracker-import-meta-v1";
 
+function readLocalWorkspaceSnapshotFromStorage() {
+  if (typeof window === "undefined") return null;
+
+  const buildSnapshot = (source = {}, importMetaSource = null) => ({
+    products: Array.isArray(source.products) ? source.products.map(sanitizeProductRecord) : [],
+    tracking: Array.isArray(source.tracking) ? source.tracking : [],
+    customers: Array.isArray(source.customers) ? source.customers.map(sanitizeCustomerRecord) : [],
+    serviceForm: sanitizeServiceForm(source.serviceForm || getDefaultServiceForm()),
+    situationData: sanitizeSituationData(source.situationData || getDefaultSituationData()),
+    metaAdsState: sanitizeMetaAdsState(source.metaAdsState || getDefaultMetaAdsState()),
+    importMeta: {
+      lastOrdersImportAt: source.importMeta?.lastOrdersImportAt || importMetaSource?.lastOrdersImportAt || null,
+      lastShippingImportAt: source.importMeta?.lastShippingImportAt || importMetaSource?.lastShippingImportAt || null,
+    },
+  });
+
+  try {
+    const importMetaRaw = localStorage.getItem(IMPORT_META_KEY);
+    const storedImportMeta = importMetaRaw ? JSON.parse(importMetaRaw) : null;
+
+    const autoBackupRaw = localStorage.getItem(AUTO_BACKUP_KEY);
+    if (autoBackupRaw) {
+      const autoBackup = buildSnapshot(JSON.parse(autoBackupRaw), storedImportMeta);
+      if (hasMeaningfulWorkspaceData(autoBackup)) return autoBackup;
+    }
+
+    const storageRaw = localStorage.getItem(STORAGE_KEY);
+    if (storageRaw) {
+      const localSnapshot = buildSnapshot(JSON.parse(storageRaw), storedImportMeta);
+      if (hasMeaningfulWorkspaceData(localSnapshot)) return localSnapshot;
+    }
+  } catch {
+    // ignore browser backup parsing issue
+  }
+
+  return null;
+}
+
 const pageBg = "#f5f7fb";
 const cardBg = "rgba(255, 255, 255, 0.94)";
 const cardBorder = "#d9e1ec";
@@ -616,15 +654,22 @@ export default function App() {
   const lastSharedPayloadRef = useRef("");
   const latestSharedStateRef = useRef({});
   const queuedSharedSnapshotRef = useRef(null);
+  const initialBrowserSnapshotRef = useRef(null);
+  if (initialBrowserSnapshotRef.current === null) {
+    initialBrowserSnapshotRef.current = readLocalWorkspaceSnapshotFromStorage();
+  }
+  const initialBrowserSnapshot = initialBrowserSnapshotRef.current;
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === "undefined" ? 1280 : window.innerWidth
   );
   const [activePage, setActivePage] = useState("dashboard");
   const [selectedService, setSelectedService] = useState("standard");
   const [selectedCountry, setSelectedCountry] = useState("tanzania");
-  const [serviceForm, setServiceForm] = useState(getDefaultServiceForm);
+  const [serviceForm, setServiceForm] = useState(() =>
+    sanitizeServiceForm(initialBrowserSnapshot?.serviceForm || getDefaultServiceForm())
+  );
   const [situationData, setSituationData] = useState(() => {
-    if (supabaseEnabled) return getDefaultSituationData();
+    if (supabaseEnabled) return sanitizeSituationData(initialBrowserSnapshot?.situationData || getDefaultSituationData());
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? sanitizeSituationData(JSON.parse(raw).situationData) : getDefaultSituationData();
@@ -668,7 +713,7 @@ export default function App() {
   const [shippingImportNotice, setShippingImportNotice] = useState("");
   const [shippingImportDetails, setShippingImportDetails] = useState(null);
   const [importMeta, setImportMeta] = useState(() => {
-    if (supabaseEnabled) return getDefaultImportMeta();
+    if (supabaseEnabled) return initialBrowserSnapshot?.importMeta || getDefaultImportMeta();
     try {
       const raw = localStorage.getItem(IMPORT_META_KEY);
       return raw ? JSON.parse(raw) : getDefaultImportMeta();
@@ -677,7 +722,7 @@ export default function App() {
     }
   });
   const [metaAdsState, setMetaAdsState] = useState(() => {
-    if (supabaseEnabled) return getDefaultMetaAdsState();
+    if (supabaseEnabled) return sanitizeMetaAdsState(initialBrowserSnapshot?.metaAdsState || getDefaultMetaAdsState());
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? sanitizeMetaAdsState(JSON.parse(raw).metaAdsState) : getDefaultMetaAdsState();
@@ -731,7 +776,7 @@ export default function App() {
   const [auditSearch, setAuditSearch] = useState("");
 
   const [products, setProducts] = useState(() => {
-    if (supabaseEnabled) return [];
+    if (supabaseEnabled) return Array.isArray(initialBrowserSnapshot?.products) ? initialBrowserSnapshot.products.map(sanitizeProductRecord) : [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? (JSON.parse(raw).products || initialProducts).map(sanitizeProductRecord) : initialProducts.map(sanitizeProductRecord);
@@ -741,7 +786,7 @@ export default function App() {
   });
 
   const [tracking, setTracking] = useState(() => {
-    if (supabaseEnabled) return [];
+    if (supabaseEnabled) return Array.isArray(initialBrowserSnapshot?.tracking) ? initialBrowserSnapshot.tracking : [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? JSON.parse(raw).tracking || initialTracking : initialTracking;
@@ -751,7 +796,7 @@ export default function App() {
   });
 
   const [customers, setCustomers] = useState(() => {
-    if (supabaseEnabled) return [];
+    if (supabaseEnabled) return Array.isArray(initialBrowserSnapshot?.customers) ? initialBrowserSnapshot.customers.map(sanitizeCustomerRecord) : [];
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       return raw ? (JSON.parse(raw).customers || INITIAL_CUSTOMERS).map(sanitizeCustomerRecord) : INITIAL_CUSTOMERS;
@@ -785,19 +830,30 @@ export default function App() {
     };
   }, [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking]);
 
+  const readBrowserBackupSnapshot = useCallback(() => readLocalWorkspaceSnapshotFromStorage(), []);
+
   const applySharedStateSnapshot = useCallback((snapshot = {}) => {
     const cloudDefaults = getDefaultCloudWorkspaceState();
-    const fallbackSnapshot = supabaseEnabled
-      ? cloudDefaults
-      : {
-          products: initialProducts.map(sanitizeProductRecord),
-          tracking: [...initialTracking],
-          customers: INITIAL_CUSTOMERS.map(sanitizeCustomerRecord),
-          serviceForm: getDefaultServiceForm(),
-          situationData: getDefaultSituationData(),
-          metaAdsState: getDefaultMetaAdsState(),
-          importMeta: getDefaultImportMeta(),
-        };
+    const localBaseSnapshot =
+      (hasMeaningfulWorkspaceData(latestSharedStateRef.current) && latestSharedStateRef.current) ||
+      readBrowserBackupSnapshot() ||
+      null;
+    const fallbackSnapshot = localBaseSnapshot
+      ? {
+          ...cloudDefaults,
+          ...localBaseSnapshot,
+        }
+      : supabaseEnabled
+        ? cloudDefaults
+        : {
+            products: initialProducts.map(sanitizeProductRecord),
+            tracking: [...initialTracking],
+            customers: INITIAL_CUSTOMERS.map(sanitizeCustomerRecord),
+            serviceForm: getDefaultServiceForm(),
+            situationData: getDefaultSituationData(),
+            metaAdsState: getDefaultMetaAdsState(),
+            importMeta: getDefaultImportMeta(),
+          };
     const normalizedSnapshot = {
       products: Array.isArray(snapshot.products) ? snapshot.products.map(sanitizeProductRecord) : fallbackSnapshot.products,
       tracking: Array.isArray(snapshot.tracking) ? snapshot.tracking : fallbackSnapshot.tracking,
@@ -825,7 +881,7 @@ export default function App() {
         sharedHydratingRef.current = false;
       }, 0);
     }
-  }, []);
+  }, [readBrowserBackupSnapshot]);
 
   useEffect(() => {
     if (supabaseEnabled) return;
@@ -924,11 +980,24 @@ export default function App() {
         if (cancelled) return;
         const remoteState = payload.state || {};
         const cloudMode = supabaseEnabled && cloudAuth.user;
+        const remoteHasData = hasMeaningfulWorkspaceData(remoteState);
+        const localSnapshot = latestSharedStateRef.current || {};
+        const localHasData = hasMeaningfulWorkspaceData(localSnapshot);
+        const browserBackupSnapshot = readBrowserBackupSnapshot();
+        const recoveredFromBrowserBackup = !remoteHasData && !localHasData && Boolean(browserBackupSnapshot);
+        const shouldKeepLocal = !remoteHasData && localHasData;
 
         if (cloudMode) {
-          applySharedStateSnapshot(remoteState);
+          if (shouldKeepLocal) {
+            lastSharedPayloadRef.current = "";
+          } else if (browserBackupSnapshot) {
+            applySharedStateSnapshot(browserBackupSnapshot);
+            lastSharedPayloadRef.current = "";
+          } else {
+            applySharedStateSnapshot(remoteState);
+            lastSharedPayloadRef.current = JSON.stringify(remoteState);
+          }
           sharedVersionRef.current = Number(payload.version || 0);
-          lastSharedPayloadRef.current = JSON.stringify(remoteState);
           setSharedWorkspace({
             mode: "cloud",
             available: true,
@@ -937,51 +1006,35 @@ export default function App() {
             initialized: true,
             version: Number(payload.version || 0),
             updatedAt: payload.updatedAt || null,
-            notice: "Cloud workspace connected",
+            notice: recoveredFromBrowserBackup
+              ? "Recovered cloud data from browser backup"
+              : shouldKeepLocal
+                ? "Cloud workspace was empty - keeping local data"
+                : "Cloud workspace connected",
           });
           return;
         }
 
-        const remoteHasData = hasMeaningfulWorkspaceData(remoteState);
         const remoteLooksFresh =
           !remoteHasData &&
           Number(payload.version || 0) <= 0 &&
           !payload.updatedAt;
-        const localSnapshot = latestSharedStateRef.current || {};
-        const localHasData = hasMeaningfulWorkspaceData(localSnapshot);
         let recoveredFromAutoBackup = false;
 
         if (!cloudMode && remoteLooksFresh && !localHasData) {
-          try {
-            const rawAutoBackup = localStorage.getItem(AUTO_BACKUP_KEY);
-            if (rawAutoBackup) {
-              const parsedAutoBackup = JSON.parse(rawAutoBackup);
-              const backupState = {
-                products: Array.isArray(parsedAutoBackup.products) ? parsedAutoBackup.products : [],
-                tracking: Array.isArray(parsedAutoBackup.tracking) ? parsedAutoBackup.tracking : [],
-                customers: Array.isArray(parsedAutoBackup.customers) ? parsedAutoBackup.customers : [],
-                serviceForm: parsedAutoBackup.serviceForm || null,
-                situationData: parsedAutoBackup.situationData || null,
-                metaAdsState: parsedAutoBackup.metaAdsState || null,
-                importMeta: parsedAutoBackup.importMeta || null,
-              };
-              if (hasMeaningfulWorkspaceData(backupState)) {
-                applySharedStateSnapshot(backupState);
-                recoveredFromAutoBackup = true;
-              }
-            }
-          } catch {
-            // ignore auto-backup recovery issue
+          if (browserBackupSnapshot) {
+            applySharedStateSnapshot(browserBackupSnapshot);
+            recoveredFromAutoBackup = true;
           }
         }
 
-        const shouldKeepLocal = remoteLooksFresh && localHasData;
+        const shouldKeepLocalShared = remoteLooksFresh && localHasData;
 
-        if (!shouldKeepLocal && !recoveredFromAutoBackup) {
+        if (!shouldKeepLocalShared && !recoveredFromAutoBackup) {
           applySharedStateSnapshot(remoteState);
         }
         sharedVersionRef.current = Number(payload.version || 0);
-        lastSharedPayloadRef.current = shouldKeepLocal || recoveredFromAutoBackup ? "" : JSON.stringify(remoteState);
+        lastSharedPayloadRef.current = shouldKeepLocalShared || recoveredFromAutoBackup ? "" : JSON.stringify(remoteState);
         setSharedWorkspace({
           mode: supabaseEnabled ? "cloud" : "shared",
           available: true,
@@ -992,7 +1045,7 @@ export default function App() {
           updatedAt: payload.updatedAt || null,
           notice: recoveredFromAutoBackup
             ? "Recovered from browser auto backup"
-            : shouldKeepLocal
+            : shouldKeepLocalShared
               ? `${supabaseEnabled ? "Cloud" : "Shared"} workspace was empty - keeping local data`
               : `${supabaseEnabled ? "Cloud" : "Shared"} workspace connected`,
         });
@@ -1015,7 +1068,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [applySharedStateSnapshot, cloudAuth.ready, cloudAuth.user]);
+  }, [applySharedStateSnapshot, cloudAuth.ready, cloudAuth.user, readBrowserBackupSnapshot]);
 
   useEffect(() => {
     localStorage.setItem(IMPORT_META_KEY, JSON.stringify(importMeta));
@@ -1042,17 +1095,18 @@ export default function App() {
       serviceForm,
       situationData,
       metaAdsState,
+      importMeta,
       exportedAt: new Date().toISOString(),
       version: 1,
     };
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ products, tracking, customers, serviceForm, situationData, metaAdsState }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ products, tracking, customers, serviceForm, situationData, metaAdsState, importMeta }));
     localStorage.setItem(AUTO_BACKUP_KEY, JSON.stringify(payload));
 
     const now = new Date().toISOString();
     localStorage.setItem(AUTO_BACKUP_META_KEY, JSON.stringify({ lastAutoBackupAt: now }));
     setLastAutoBackupAt(now);
-  }, [products, tracking, customers, serviceForm, situationData, metaAdsState]);
+  }, [products, tracking, customers, serviceForm, situationData, metaAdsState, importMeta]);
 
   useEffect(() => {
     const bucket = getDayBucket(currentTime);
@@ -1226,8 +1280,12 @@ export default function App() {
           if (!cloudAuth.user) return;
 
           const payload = await loadCloudWorkspace(supabaseWorkspaceId);
+          const remoteState = payload.state || {};
           const remoteVersion = Number(payload.version || 0);
-          const remoteSerialized = JSON.stringify(payload.state || {});
+          const remoteSerialized = JSON.stringify(remoteState);
+          const localSnapshot = latestSharedStateRef.current || {};
+          const remoteHasData = hasMeaningfulWorkspaceData(remoteState);
+          const localHasData = hasMeaningfulWorkspaceData(localSnapshot);
 
           if (!cancelled) {
             setSharedWorkspace((prev) => ({
@@ -1243,12 +1301,22 @@ export default function App() {
             }));
           }
 
+          if (!remoteHasData && localHasData && !sharedSyncLockRef.current) {
+            lastSharedPayloadRef.current = "";
+            void persistSharedSnapshot(localSnapshot, {
+              progressNotice: "Restoring cloud workspace data...",
+              successNotice: "Cloud workspace restored",
+              failurePrefix: "Cloud workspace restore failed",
+            });
+            return;
+          }
+
           if (
             !sharedSyncLockRef.current &&
             (remoteVersion > Number(sharedVersionRef.current || 0) || remoteSerialized !== lastSharedPayloadRef.current)
           ) {
             if (cancelled) return;
-            applySharedStateSnapshot(payload.state || {});
+            applySharedStateSnapshot(remoteState);
             sharedVersionRef.current = remoteVersion;
             lastSharedPayloadRef.current = remoteSerialized;
             setSharedWorkspace((prev) => ({
@@ -1280,17 +1348,28 @@ export default function App() {
           }));
         }
 
-        if (remoteVersion > Number(sharedVersionRef.current || 0) && !sharedSyncLockRef.current) {
-          const response = await fetch(getSharedApiBase(), { headers: { Accept: "application/json" } });
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Unable to refresh shared workspace.");
-          if (cancelled) return;
-          applySharedStateSnapshot(payload.state || {});
-          sharedVersionRef.current = Number(payload.version || remoteVersion);
-          lastSharedPayloadRef.current = JSON.stringify(payload.state || {});
-          setSharedWorkspace((prev) => ({
-            ...prev,
-            mode: "shared",
+          if (remoteVersion > Number(sharedVersionRef.current || 0) && !sharedSyncLockRef.current) {
+            const response = await fetch(getSharedApiBase(), { headers: { Accept: "application/json" } });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Unable to refresh shared workspace.");
+            if (cancelled) return;
+            const remoteState = payload.state || {};
+            const localSnapshot = latestSharedStateRef.current || {};
+            if (!hasMeaningfulWorkspaceData(remoteState) && hasMeaningfulWorkspaceData(localSnapshot)) {
+              lastSharedPayloadRef.current = "";
+              void persistSharedSnapshot(localSnapshot, {
+                progressNotice: "Restoring shared workspace data...",
+                successNotice: "Shared workspace restored",
+                failurePrefix: "Shared workspace restore failed",
+              });
+              return;
+            }
+            applySharedStateSnapshot(remoteState);
+            sharedVersionRef.current = Number(payload.version || remoteVersion);
+            lastSharedPayloadRef.current = JSON.stringify(remoteState);
+            setSharedWorkspace((prev) => ({
+              ...prev,
+              mode: "shared",
             available: true,
             version: Number(payload.version || remoteVersion),
             updatedAt: payload.updatedAt || prev.updatedAt,
@@ -1314,21 +1393,32 @@ export default function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [applySharedStateSnapshot, cloudAuth.user]);
+  }, [applySharedStateSnapshot, cloudAuth.user, persistSharedSnapshot]);
 
   useEffect(() => {
     if (!supabaseEnabled || !cloudAuth.user) return undefined;
 
     const unsubscribe = subscribeToCloudWorkspace(supabaseWorkspaceId, (payload) => {
+      const remoteState = payload?.state || {};
       const remoteVersion = Number(payload?.version || 0);
-      const remoteSerialized = JSON.stringify(payload?.state || {});
+      const remoteSerialized = JSON.stringify(remoteState);
       if (
         sharedSyncLockRef.current ||
         (remoteVersion <= Number(sharedVersionRef.current || 0) && remoteSerialized === lastSharedPayloadRef.current)
       ) {
         return;
       }
-      applySharedStateSnapshot(payload.state || {});
+      const localSnapshot = latestSharedStateRef.current || {};
+      if (!hasMeaningfulWorkspaceData(remoteState) && hasMeaningfulWorkspaceData(localSnapshot)) {
+        lastSharedPayloadRef.current = "";
+        void persistSharedSnapshot(localSnapshot, {
+          progressNotice: "Restoring cloud workspace data...",
+          successNotice: "Cloud workspace restored",
+          failurePrefix: "Cloud workspace restore failed",
+        });
+        return;
+      }
+      applySharedStateSnapshot(remoteState);
       sharedVersionRef.current = remoteVersion;
       lastSharedPayloadRef.current = remoteSerialized;
       setSharedWorkspace((prev) => ({
@@ -1344,7 +1434,7 @@ export default function App() {
     return () => {
       unsubscribe();
     };
-  }, [applySharedStateSnapshot, cloudAuth.user]);
+  }, [applySharedStateSnapshot, cloudAuth.user, persistSharedSnapshot]);
 
   const persistProductsSnapshot = useCallback(
     async (nextProducts, notice = "Cloud product catalog synced") => {
@@ -1390,6 +1480,8 @@ export default function App() {
           orderedUnits: 0,
           confirmed: 0,
           confirmedUnits: 0,
+          shipping: 0,
+          shippingUnits: 0,
           delivered: 0,
           deliveredUnits: 0,
           returned: 0,
@@ -1409,6 +1501,10 @@ export default function App() {
       if (isConfirmationConfirmed(confirmationStatus)) {
         acc[productId].confirmed += 1;
         acc[productId].confirmedUnits += quantity;
+      }
+      if (shippingStatus && isShippingInProgress(shippingStatus)) {
+        acc[productId].shipping += 1;
+        acc[productId].shippingUnits += quantity;
       }
       if (isShippingDelivered(shippingStatus)) {
         acc[productId].delivered += 1;
@@ -1437,6 +1533,8 @@ export default function App() {
           orderedUnits: 0,
           confirmed: 0,
           confirmedUnits: 0,
+          shipping: 0,
+          shippingUnits: 0,
           delivered: 0,
           deliveredUnits: 0,
           returned: 0,
@@ -1453,11 +1551,13 @@ export default function App() {
         });
 
         const deliveredUnits = Number(customerMetrics.deliveredUnits || 0);
+        const shippingUnits = Number(customerMetrics.shippingUnits || 0);
         const returnedUnits = Number(customerMetrics.returnedUnits || 0);
         const confirmedUnits = Number(customerMetrics.confirmedUnits || 0);
         const orderedUnits = Number(customerMetrics.orderedUnits || 0);
         const delivered = Number(customerMetrics.delivered || 0);
         const confirmed = Number(customerMetrics.confirmed || 0);
+        const shipping = Number(customerMetrics.shipping || 0);
         const orders = Number(customerMetrics.orders || 0);
         const revenue = Number(customerMetrics.revenue || 0);
         const unitProductCost = getUnitProductCostUSD(product);
@@ -1471,8 +1571,8 @@ export default function App() {
         const deliveryRate = confirmed > 0 ? delivered / confirmed : 0;
         const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
         const initialStock = Number(product.totalQty || 0);
-        const reservedStock = Math.max(confirmedUnits - deliveredUnits - returnedUnits, 0);
-        const currentStock = Math.max(initialStock - deliveredUnits, 0);
+        const reservedStock = Math.max(confirmedUnits - shippingUnits - deliveredUnits - returnedUnits, 0);
+        const currentStock = Math.max(initialStock - shippingUnits - deliveredUnits, 0);
         const availableStock = Math.max(currentStock - reservedStock, 0);
         const salesPerDay = deliveredUnits > 0 ? deliveredUnits / 30 : 0;
         const arrivalDays = Number(product.estimatedArrivalDays || 0);
@@ -1512,8 +1612,10 @@ export default function App() {
           orders,
           orderedUnits,
           confirmed,
+          shipping,
           delivered,
           confirmedUnits,
+          shippingUnits,
           deliveredUnits,
           returnedOrders: customerMetrics.returned,
           returnedUnits,
@@ -3551,17 +3653,10 @@ export default function App() {
 
     const productEconomics = products
       .map((product) => {
-      const productStats = productDashboardMap[product.id] || {};
       const adInput = situationData.adInputs?.[product.id] || {};
       const hasManualAdInput = Object.prototype.hasOwnProperty.call(situationData.adInputs || {}, product.id);
-      const averageLeadCostTzs =
-        hasManualAdInput
-          ? Number(adInput.averageLeadCostTzs || 0)
-          : Number(productStats.costPerLead || 0);
-      const incomingLeads =
-        hasManualAdInput
-          ? Number(adInput.incomingLeads || 0)
-          : Number(productStats.orders || 0);
+      const averageLeadCostTzs = hasManualAdInput ? Number(adInput.averageLeadCostTzs || 0) : 0;
+      const incomingLeads = hasManualAdInput ? Number(adInput.incomingLeads || 0) : 0;
       const revenueTzs = Number(product.sellingPrice || 0) * Number(product.totalQty || 0);
       const stockCostTzs =
         (Number(product.purchaseUnitPrice || 0) * Number(product.totalQty || 0) * USD_TO_TZS) +
@@ -3571,12 +3666,7 @@ export default function App() {
       const fixedChargesProductTzs = stockCostTzs + productFixedChargeBonusTzs;
       const currentAdsCostTzs = averageLeadCostTzs * incomingLeads;
       const maxAdsCostTzs = Math.max(revenueTzs - fixedChargesProductTzs, 0);
-      const adsInputSourceLabel =
-        hasManualAdInput
-          ? "Manual ads input"
-          : Number(productStats.costPerLead || 0) > 0 || Number(productStats.orders || 0) > 0
-            ? "Tracking fallback"
-            : "No ads input yet";
+      const adsInputSourceLabel = hasManualAdInput ? "Manual ads input" : "No ads input yet";
       const revenuePercent = revenueTzs > 0 ? 100 : 0;
       const marginOnVariableCostTzs = revenueTzs - currentAdsCostTzs;
       const tmcvPercent = revenueTzs > 0 ? (marginOnVariableCostTzs / revenueTzs) * 100 : 0;
@@ -3637,7 +3727,7 @@ export default function App() {
       configuredAdsUsedTzs,
       configuredAverageLeadCostTzs,
     };
-  }, [liveAutomationSummary.localDeliveryCostTzs, productDashboardMap, products, situationData]);
+  }, [liveAutomationSummary.localDeliveryCostTzs, products, situationData]);
 
   const weeklyProductProfitRows = useMemo(() => {
     const grouped = {};
@@ -3942,7 +4032,7 @@ export default function App() {
         const adInput = situationData.adInputs?.[product.id] || {};
         const manualAdsUsedTzs = Number(adInput.averageLeadCostTzs || 0) * Number(adInput.incomingLeads || 0);
         const liveObservedAdsTzs = Number(product.spend || 0);
-        const cumulativeAdsTzs = Number(situationData.cumulativeAdsByProduct?.[product.id] || 0);
+        const cumulativeAdsTzs = manualAdsUsedTzs;
         const deliveredLogisticsTzs = Number(product.revenue || 0) - Number(product.profit || 0) - liveObservedAdsTzs;
         const cumulativeProfitTzs = Number(product.revenue || 0) - cumulativeAdsTzs - deliveredLogisticsTzs;
         const fixedProductChargesTzs =
@@ -3965,7 +4055,7 @@ export default function App() {
         };
       })
       .sort((a, b) => Number(b.cumulativeProfitTzs || 0) - Number(a.cumulativeProfitTzs || 0));
-  }, [productDashboard, situationData.adInputs, situationData.cumulativeAdsByProduct]);
+  }, [productDashboard, situationData.adInputs]);
 
   const auditRows = useMemo(() => {
     return customers
@@ -7583,7 +7673,9 @@ export default function App() {
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.revenue)}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>
                             <div style={{ fontWeight: 800 }}>{formatUsdFromTzs(row.cumulativeAdsTzs)}</div>
-                            <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>Live now {formatUsdFromTzs(row.liveObservedAdsTzs)}</div>
+                            <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>
+                              {Number(row.cumulativeAdsTzs || 0) > 0 ? "Manual ads input" : "No ads input yet"}
+                            </div>
                           </td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, color: Number(row.cumulativeProfitTzs || 0) >= 0 ? green : red, fontWeight: 800 }}>
                             <div>{formatUsdFromTzs(row.cumulativeProfitTzs)}</div>
