@@ -118,6 +118,9 @@ import {
   startOfMonth,
   USD_TO_TZS,
 } from "./lib/appLogic";
+
+const LOCAL_DELIVERY_USD_PER_DELIVERED = 8.5;
+const LOCAL_DELIVERY_TZS_PER_DELIVERED = LOCAL_DELIVERY_USD_PER_DELIVERED * USD_TO_TZS;
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
 
 const STORAGE_KEY = "tanzania-ecom-tracker-v16";
@@ -1756,7 +1759,7 @@ export default function App() {
         const orders = Number(customerMetrics.orders || 0);
         const revenue = Number(customerMetrics.revenue || 0);
         const unitProductCost = getUnitProductCostUSD(product);
-        const deliveryTzs = Number(product.delivery || 0);
+        const deliveryTzs = LOCAL_DELIVERY_TZS_PER_DELIVERED;
         const logisticsOutflow = deliveredUnits * ((unitProductCost * USD_TO_TZS) + deliveryTzs);
         const profit = revenue - spend - logisticsOutflow;
         const cpa = deliveredUnits > 0 ? spend / deliveredUnits : 0;
@@ -3687,7 +3690,7 @@ export default function App() {
       0
     );
     const localDeliveryCostTzs = productDashboard.reduce(
-      (sum, product) => sum + (Number(product.deliveredUnits || 0) * Number(product.delivery || 0)),
+      (sum, product) => sum + (Number(product.deliveredUnits || 0) * LOCAL_DELIVERY_TZS_PER_DELIVERED),
       0
     );
 
@@ -4160,7 +4163,7 @@ export default function App() {
         grouped[key].deliveredOrders += 1;
         grouped[key].deliveredUnits += qty;
         grouped[key].revenueTzs += getCustomerOrderTotalTzs(customer, product);
-        grouped[key].localDeliveryTzs += Number(product.delivery || 0) * qty;
+        grouped[key].localDeliveryTzs += LOCAL_DELIVERY_TZS_PER_DELIVERED * qty;
         grouped[key].importCostTzs += getUnitProductCostUSD(product) * USD_TO_TZS * qty;
       }
     });
@@ -4425,7 +4428,7 @@ export default function App() {
       const liveObservedAdsTzs = Number(product.spend || 0);
       const stockPurchaseTzs = Number(product.purchaseUnitPrice || 0) * Number(product.totalQty || 0) * USD_TO_TZS;
       const importChargesTzs = Number(product.shippingTotal || 0) + Number(product.otherCharges || 0);
-      const deliveryChargesTzs = Number(product.delivery || 0) * Number(product.deliveredUnits || 0);
+      const deliveryChargesTzs = LOCAL_DELIVERY_TZS_PER_DELIVERED * Number(product.deliveredUnits || 0);
       const productChargesTzs = stockPurchaseTzs + importChargesTzs + deliveryChargesTzs;
 
       return {
@@ -4554,7 +4557,7 @@ export default function App() {
         const quantity = Math.max(1, Number(customer.quantity || 1));
         const revenueTzs = getCustomerOrderTotalTzs(customer, product);
         const importCostTzs = getUnitProductCostUSD(product) * USD_TO_TZS * quantity;
-        const localDeliveryTzs = Number(product?.delivery || 0) * quantity;
+        const localDeliveryTzs = LOCAL_DELIVERY_TZS_PER_DELIVERED * quantity;
         grouped[owner].deliveredOrders += 1;
         grouped[owner].revenueTzs += revenueTzs;
         grouped[owner].profitTzs += revenueTzs - importCostTzs - localDeliveryTzs;
