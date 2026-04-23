@@ -3019,11 +3019,18 @@ export default function App() {
                 "total price",
                 "total",
                 "amount",
+                "order amount",
+                "amount paid",
+                "paid amount",
+                "customer amount",
                 "amount tzs",
                 "price total",
                 "total amount",
                 "montant",
                 "montant total",
+                "montant paye",
+                "prix paye",
+                "prix paye client",
               ])
             )
           );
@@ -3276,6 +3283,28 @@ export default function App() {
           const productId = String(rawProduct || "").trim() ? resolveImportedProductId(rawProduct) : "";
           const quantityRaw = getExcelCellValue(row, ["quantity", "qty", "quantite", "quantite commande", "quantity ordered", "product qt"]);
           const quantity = quantityRaw === "" || quantityRaw == null ? null : Math.max(1, Number(quantityRaw || 1));
+          const orderTotalTzs = Math.max(
+            0,
+            parseLooseNumber(
+              getExcelCellValue(row, [
+                "total price",
+                "total",
+                "amount",
+                "order amount",
+                "amount paid",
+                "paid amount",
+                "customer amount",
+                "amount tzs",
+                "price total",
+                "total amount",
+                "montant",
+                "montant total",
+                "montant paye",
+                "prix paye",
+                "prix paye client",
+              ])
+            )
+          );
           const orderDateRaw = getExcelCellValue(row, ["order date", "date", "date commande", "created at", "order created at"]);
           const orderDate = orderDateRaw === "" || orderDateRaw == null ? "" : excelDateToInput(orderDateRaw);
           const shippingStatusRaw = getExcelCellValue(row, [
@@ -3328,6 +3357,7 @@ export default function App() {
             shippingStatus: nextStatus,
             status: nextStatus,
             confirmationStatus: isConfirmationConfirmed(existing.confirmationStatus) ? existing.confirmationStatus : "confirmed",
+            orderTotalTzs: orderTotalTzs || Number(existing.orderTotalTzs || 0),
             sourceOrderId: existing.sourceOrderId || sourceOrderId || null,
             lastShippingImportedAt: importFinishedAt,
             actualDeliveryDate: isShippingDelivered(nextStatus) ? existing.actualDeliveryDate || getTodayString() : existing.actualDeliveryDate || "",
