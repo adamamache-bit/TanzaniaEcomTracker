@@ -2152,6 +2152,26 @@ export default function App() {
     };
   }, [metaCampaignRows.length, metaInsightsSummary]);
 
+  const isMetaTokenExpiredError = (error) => {
+    const message = error instanceof Error ? error.message : String(error || "");
+    return /session has expired|access token|oauth/i.test(message);
+  };
+
+  const handleMetaRequestError = useCallback((error, fallbackMessage = "Unable to sync Meta Ads.") => {
+    const message = error instanceof Error ? error.message : String(error || fallbackMessage);
+    if (isMetaTokenExpiredError(error)) {
+      setMetaAdsState((prev) => ({ ...prev, autoSync: false }));
+      const cleanMessage =
+        "Meta access token expired. Auto-sync has been paused. Generate a new Meta access token, paste it here, then click Refresh insights to reconnect.";
+      setMetaAdsNotice(cleanMessage);
+      return cleanMessage;
+    }
+
+    const cleanMessage = message || fallbackMessage;
+    setMetaAdsNotice(cleanMessage);
+    return cleanMessage;
+  }, []);
+
   const loadMetaAdAccounts = async () => {
     if (!metaAdsState.accessToken.trim()) {
       setMetaAdsNotice("Meta sync is optional. Paste your Meta access token only if you want to import Ads Manager data. The manual Tracking section below already works without it.");
@@ -2177,7 +2197,7 @@ export default function App() {
         setMetaAdsState((prev) => ({ ...prev, accountId: String(payload.accounts[0].id) }));
       }
     } catch (error) {
-      setMetaAdsNotice(error instanceof Error ? error.message : "Unable to load Meta ad accounts.");
+      handleMetaRequestError(error, "Unable to load Meta ad accounts.");
     } finally {
       setMetaAdsLoading((prev) => ({ ...prev, accounts: false }));
     }
@@ -2503,11 +2523,11 @@ export default function App() {
       }
       if (!options.silent) setMetaAdsNotice(`Insights updated for ${metaAdsState.dateStart} -> ${metaAdsState.dateEnd}.`);
     } catch (error) {
-      if (!options.silent) setMetaAdsNotice(error instanceof Error ? error.message : "Unable to load Meta insights.");
+      if (!options.silent || isMetaTokenExpiredError(error)) handleMetaRequestError(error, "Unable to load Meta insights.");
     } finally {
       setMetaAdsLoading((prev) => ({ ...prev, insights: false }));
     }
-  }, [fetchMetaInsightsPayload, importMetaInsightsPayload, metaAdsState.autoSync, metaAdsState.dateEnd, metaAdsState.dateStart, syncMetaTotalSpend]);
+  }, [fetchMetaInsightsPayload, handleMetaRequestError, importMetaInsightsPayload, metaAdsState.autoSync, metaAdsState.dateEnd, metaAdsState.dateStart, syncMetaTotalSpend]);
 
   const updateMetaCampaignMapping = (campaignId, productId) => {
     setMetaAdsState((prev) => ({
@@ -2563,8 +2583,10 @@ export default function App() {
         if (!cancelled) {
           metaSpendBootstrapRef.current = bootstrapKey;
         }
-      } catch {
-        // keep silent here: manual refresh button can still show the detailed Meta error
+      } catch (error) {
+        if (!cancelled && isMetaTokenExpiredError(error)) {
+          handleMetaRequestError(error, "Unable to load Meta total spend.");
+        }
       }
     };
 
@@ -2572,7 +2594,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [metaAdsState.accessToken, metaAdsState.accountId, syncMetaTotalSpend]);
+  }, [handleMetaRequestError, metaAdsState.accessToken, metaAdsState.accountId, syncMetaTotalSpend]);
 
   useEffect(() => {
     if (!metaAdsState.autoSync) return undefined;
@@ -2589,6 +2611,8 @@ export default function App() {
         if (shouldBootstrap) {
           metaSpendBootstrapRef.current = bootstrapKey;
         }
+      } catch (error) {
+        handleMetaRequestError(error, "Unable to auto-sync Meta Ads.");
       } finally {
         metaAutoSyncLockRef.current = false;
       }
@@ -2606,6 +2630,7 @@ export default function App() {
     metaAdsState.campaignMappings,
     metaAdsState.dateEnd,
     metaAdsState.dateStart,
+    handleMetaRequestError,
     refreshMetaInsights,
     syncMetaTotalSpend,
   ]);
