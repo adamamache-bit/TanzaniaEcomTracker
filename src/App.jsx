@@ -5924,7 +5924,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div style={{ ...styles.card, padding: 22 }}>
+              <div style={{ ...styles.card, padding: 22, position: "relative", zIndex: 20, overflow: "visible" }}>
                 <div style={styles.sectionHeader}>
                   <div>
                     <div style={{ fontSize: 22, fontWeight: 800 }}>Evolution des commandes</div>
