@@ -570,7 +570,16 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
     triggerRect && typeof window !== "undefined"
       ? Math.max(16, Math.min(triggerRect.right - popupWidth, window.innerWidth - popupWidth - 16))
       : 16;
-  const popupTop = triggerRect ? triggerRect.bottom + 10 : 80;
+  const estimatedPopupHeight = showSecondMonth ? 640 : 760;
+  const preferredTop = triggerRect ? triggerRect.bottom + 10 : 80;
+  const popupTop =
+    typeof window !== "undefined"
+      ? Math.max(16, Math.min(preferredTop, window.innerHeight - Math.min(estimatedPopupHeight, window.innerHeight - 32) - 16))
+      : preferredTop;
+  const popupMaxHeight =
+    typeof window !== "undefined"
+      ? Math.max(320, window.innerHeight - popupTop - 16)
+      : 760;
 
   return (
     <div style={{ position: "relative" }}>
@@ -608,7 +617,7 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
             left: popupLeft,
             zIndex: 1200,
             width: popupWidth,
-            maxHeight: "calc(100vh - 32px)",
+            maxHeight: popupMaxHeight,
             overflowY: "auto",
             padding: 18,
             borderRadius: 24,
