@@ -456,6 +456,7 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
   const [isOpen, setIsOpen] = useState(false);
   const [draftRange, setDraftRange] = useState(value);
   const [leftMonth, setLeftMonth] = useState(() => startOfMonth(parseDateInput(value.start) || new Date()));
+  const triggerRef = useRef(null);
   const showSecondMonth = responsiveColumns("show", "hide", "hide") === "show";
 
   const rightMonth = useMemo(() => addMonths(leftMonth, 1), [leftMonth]);
@@ -557,11 +558,25 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
   };
 
   const canApply = Boolean(draftRange.start && draftRange.end);
+  const popupWidth =
+    typeof window === "undefined"
+      ? 980
+      : Math.min(980, Math.max(320, window.innerWidth * 0.92));
+  const triggerRect =
+    typeof window !== "undefined" && triggerRef.current
+      ? triggerRef.current.getBoundingClientRect()
+      : null;
+  const popupLeft =
+    triggerRect && typeof window !== "undefined"
+      ? Math.max(16, Math.min(triggerRect.right - popupWidth, window.innerWidth - popupWidth - 16))
+      : 16;
+  const popupTop = triggerRect ? triggerRect.bottom + 10 : 80;
 
   return (
     <div style={{ position: "relative" }}>
       <button
         type="button"
+        ref={triggerRef}
         style={{
           ...styles.input,
           display: "flex",
@@ -588,11 +603,13 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
       {isOpen ? (
         <div
           style={{
-            position: "absolute",
-            top: "calc(100% + 10px)",
-            right: 0,
-            zIndex: 30,
-            width: "min(980px, 92vw)",
+            position: "fixed",
+            top: popupTop,
+            left: popupLeft,
+            zIndex: 1200,
+            width: popupWidth,
+            maxHeight: "calc(100vh - 32px)",
+            overflowY: "auto",
             padding: 18,
             borderRadius: 24,
             border: `1px solid ${cardBorder}`,
