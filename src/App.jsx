@@ -566,15 +566,9 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
     typeof window !== "undefined" && triggerRef.current
       ? triggerRef.current.getBoundingClientRect()
       : null;
-  const estimatedPopupHeight = showSecondMonth ? 640 : 760;
-  const preferredTop = triggerRect ? triggerRect.bottom + 10 : 80;
-  const popupTop =
-    typeof window !== "undefined"
-      ? Math.max(16, Math.min(preferredTop, window.innerHeight - Math.min(estimatedPopupHeight, window.innerHeight - 32) - 16))
-      : preferredTop;
   const popupMaxHeight =
     typeof window !== "undefined"
-      ? Math.max(320, window.innerHeight - popupTop - 16)
+      ? Math.max(320, window.innerHeight - 32)
       : 760;
 
   return (
@@ -609,95 +603,106 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
         <div
           style={{
             position: "fixed",
-            top: popupTop,
-            left: "50%",
-            transform: "translateX(-50%)",
+            inset: 0,
             zIndex: 1200,
-            width: popupWidth,
-            maxHeight: popupMaxHeight,
-            overflowY: "auto",
-            padding: 18,
-            borderRadius: 24,
-            border: `1px solid ${cardBorder}`,
-            background: "linear-gradient(180deg, rgba(255,255,255,0.99), rgba(247,243,237,0.97))",
-            boxShadow: "0 30px 60px rgba(23,32,51,0.16)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            background: "rgba(23,32,51,0.16)",
+            backdropFilter: "blur(6px)",
           }}
+          onClick={() => setIsOpen(false)}
         >
-          <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("220px 1fr", "1fr", "1fr"), gap: 18 }}>
-            <div style={{ paddingRight: 12, borderRight: showSecondMonth ? `1px solid ${cardBorder}` : "none" }}>
-              <div style={{ fontWeight: 800, marginBottom: 14 }}>Recently used</div>
-              <div style={{ display: "grid", gap: 6 }}>
-                {META_RANGE_PRESETS.map((preset) => (
-                  <button
-                    key={preset.label}
-                    type="button"
-                    onClick={() => applyPreset(preset)}
-                    style={{
-                      textAlign: "left",
-                      padding: "10px 12px",
-                      borderRadius: 12,
-                      border: "none",
-                      background: "transparent",
-                      cursor: "pointer",
-                      color: textMain,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <button type="button" style={{ ...styles.btnSecondary, padding: "10px 12px", borderRadius: 14 }} onClick={() => setLeftMonth((prev) => addMonths(prev, -1))}>
-                  <ChevronLeft size={16} />
-                </button>
-                <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr", "1fr", "1fr"), gap: 18, width: "100%" }}>
-                  {renderMonth(leftMonth)}
-                  {showSecondMonth ? renderMonth(rightMonth) : null}
+          <div
+            style={{
+              width: popupWidth,
+              maxHeight: popupMaxHeight,
+              overflowY: "auto",
+              padding: 18,
+              borderRadius: 24,
+              border: `1px solid ${cardBorder}`,
+              background: "linear-gradient(180deg, rgba(255,255,255,0.99), rgba(247,243,237,0.97))",
+              boxShadow: "0 30px 60px rgba(23,32,51,0.16)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("220px 1fr", "1fr", "1fr"), gap: 18 }}>
+              <div style={{ paddingRight: 12, borderRight: showSecondMonth ? `1px solid ${cardBorder}` : "none" }}>
+                <div style={{ fontWeight: 800, marginBottom: 14 }}>Recently used</div>
+                <div style={{ display: "grid", gap: 6 }}>
+                  {META_RANGE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => applyPreset(preset)}
+                      style={{
+                        textAlign: "left",
+                        padding: "10px 12px",
+                        borderRadius: 12,
+                        border: "none",
+                        background: "transparent",
+                        cursor: "pointer",
+                        color: textMain,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
                 </div>
-                <button type="button" style={{ ...styles.btnSecondary, padding: "10px 12px", borderRadius: 14 }} onClick={() => setLeftMonth((prev) => addMonths(prev, 1))}>
-                  <ChevronRight size={16} />
-                </button>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr auto 1fr", "1fr auto 1fr", "1fr"), gap: 10, alignItems: "center" }}>
-                <input
-                  style={styles.input}
-                  type="date"
-                  value={draftRange.start || ""}
-                  onChange={(e) => updateDraftBoundary("start", e.target.value)}
-                  placeholder="Start date"
-                />
-                <div style={{ color: textSoft, fontWeight: 800, textAlign: "center" }}>-</div>
-                <input
-                  style={styles.input}
-                  type="date"
-                  value={draftRange.end || ""}
-                  onChange={(e) => updateDraftBoundary("end", e.target.value)}
-                  placeholder="End date"
-                />
-              </div>
+              <div style={{ display: "grid", gap: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <button type="button" style={{ ...styles.btnSecondary, padding: "10px 12px", borderRadius: 14 }} onClick={() => setLeftMonth((prev) => addMonths(prev, -1))}>
+                    <ChevronLeft size={16} />
+                  </button>
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr", "1fr", "1fr"), gap: 18, width: "100%" }}>
+                    {renderMonth(leftMonth)}
+                    {showSecondMonth ? renderMonth(rightMonth) : null}
+                  </div>
+                  <button type="button" style={{ ...styles.btnSecondary, padding: "10px 12px", borderRadius: 14 }} onClick={() => setLeftMonth((prev) => addMonths(prev, 1))}>
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
 
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ color: textSoft, fontSize: 12 }}>Dates are shown in Casablanca time</div>
-                <div style={{ display: "flex", gap: 10 }}>
-                  <button type="button" style={{ ...styles.btnSecondary, borderRadius: 16 }} onClick={() => { setDraftRange(value); setIsOpen(false); }}>
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    style={{ ...styles.btnPrimary, borderRadius: 16, opacity: canApply ? 1 : 0.5 }}
-                    disabled={!canApply}
-                    onClick={() => {
-                      onApply(draftRange);
-                      setIsOpen(false);
-                    }}
-                  >
-                    Update
-                  </button>
+                <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr auto 1fr", "1fr auto 1fr", "1fr"), gap: 10, alignItems: "center" }}>
+                  <input
+                    style={styles.input}
+                    type="date"
+                    value={draftRange.start || ""}
+                    onChange={(e) => updateDraftBoundary("start", e.target.value)}
+                    placeholder="Start date"
+                  />
+                  <div style={{ color: textSoft, fontWeight: 800, textAlign: "center" }}>-</div>
+                  <input
+                    style={styles.input}
+                    type="date"
+                    value={draftRange.end || ""}
+                    onChange={(e) => updateDraftBoundary("end", e.target.value)}
+                    placeholder="End date"
+                  />
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ color: textSoft, fontSize: 12 }}>Dates are shown in Casablanca time</div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button type="button" style={{ ...styles.btnSecondary, borderRadius: 16 }} onClick={() => { setDraftRange(value); setIsOpen(false); }}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      style={{ ...styles.btnPrimary, borderRadius: 16, opacity: canApply ? 1 : 0.5 }}
+                      disabled={!canApply}
+                      onClick={() => {
+                        onApply(draftRange);
+                        setIsOpen(false);
+                      }}
+                    >
+                      Update
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
