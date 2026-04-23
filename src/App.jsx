@@ -7571,64 +7571,6 @@ export default function App() {
                   </div>
                 ) : null}
 
-                {metaCampaignRows.length ? (
-                  <div style={{ marginTop: 18, overflowX: "auto", border: `1px solid ${cardBorder}`, borderRadius: 24, background: "linear-gradient(180deg, rgba(255,255,255,0.95), rgba(246,242,236,0.9))", boxShadow: "0 18px 34px rgba(23,32,51,0.06)" }}>
-                    <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
-                      <thead>
-                        <tr>
-                          {["Campaign", "Match product", "Spend", "Tracked leads", "Tracking source", "CPL", "Clicks (all)", "Link clicks", "LPV", "CTR", "Impressions", "Reach", "CPC", "CPM"].map((head) => (
-                            <th key={head} style={{ textAlign: "left", padding: "16px 14px", color: textSoft, fontSize: 12, fontWeight: 900, letterSpacing: 0.5, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "linear-gradient(180deg, rgba(248,244,238,0.98), rgba(243,238,231,0.95))", whiteSpace: "nowrap" }}>
-                              {head}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {metaCampaignRows.map((row, index) => {
-                          const rowCpm = Number(row.impressions || 0) > 0 ? (Number(row.spend || 0) / Number(row.impressions || 0)) * 1000 : 0;
-                          return (
-                            <tr key={row.id} style={{ background: index % 2 === 0 ? "rgba(255,255,255,0.78)" : "rgba(248,244,238,0.72)" }}>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}`, minWidth: 240 }}>
-                                <div style={{ fontWeight: 800 }}>{row.campaignName}</div>
-                                <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>{row.adsetName || "No ad set name"}</div>
-                              </td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}`, minWidth: 230 }}>
-                                <select style={{ ...styles.input, borderRadius: 12 }} value={row.mappedProductId} onChange={(e) => updateMetaCampaignMapping(row.id, e.target.value)}>
-                                  <option value="">Skip this campaign</option>
-                                  {products.map((product) => (
-                                    <option key={product.id} value={product.id}>
-                                      {product.name}
-                                    </option>
-                                  ))}
-                                </select>
-                                <div style={{ color: textSoft, fontSize: 12, marginTop: 6 }}>
-                                  {row.suggestedProductId ? `Auto-match: ${products.find((product) => product.id === row.suggestedProductId)?.name || "Detected"}` : "No automatic match"}
-                                </div>
-                              </td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800, color: accent }}>{formatMetaMoney(row.spend)}</td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800 }}>{formatInteger(row.trackedLeads ?? row.leads)}</td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}`, color: textSoft, minWidth: 190 }}>
-                                <div>{formatMetaLeadSourceLabel(row.trackedLeadType)}</div>
-                                <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>
-                                  {Number(row.actualLeads || row.leads || 0) > 0 ? `${formatInteger(row.actualLeads || row.leads)} actual lead events` : row.leadType ? formatStatusLabel(row.leadType) : "No native lead event"}
-                                </div>
-                              </td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}` }}>{formatMetaMoney(row.costPerLead)}</td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}` }}>{formatInteger(row.clicks)}</td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}` }}>{formatInteger(row.inlineLinkClicks)}</td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}` }}>{formatInteger(row.landingPageViews)}</td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}` }}>{Number(row.ctr || 0).toFixed(2)}%</td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}` }}>{formatInteger(row.impressions)}</td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}` }}>{formatInteger(row.reach)}</td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}` }}>{formatMetaMoney(row.cpc)}</td>
-                              <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}` }}>{formatMetaMoney(row.cpm || rowCpm)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : null}
               </div>
 
               <div style={{ ...styles.card, padding: 22 }}>
