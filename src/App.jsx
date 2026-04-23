@@ -1745,6 +1745,10 @@ export default function App() {
           orderedUnits: 0,
           confirmed: 0,
           confirmedUnits: 0,
+          toPrepare: 0,
+          toPrepareUnits: 0,
+          outDelivered: 0,
+          outDeliveredUnits: 0,
           shipping: 0,
           shippingUnits: 0,
           delivered: 0,
@@ -1761,11 +1765,20 @@ export default function App() {
       acc[productId].orders += 1;
       acc[productId].orderedUnits += quantity;
       const statusKey = shippingStatus || confirmationStatus;
+      const shippingBucket = shippingStatus ? getShippingBucket(shippingStatus) : "";
       acc[productId].statusCounts[statusKey] = (acc[productId].statusCounts[statusKey] || 0) + 1;
 
       if (isConfirmationConfirmed(confirmationStatus)) {
         acc[productId].confirmed += 1;
         acc[productId].confirmedUnits += quantity;
+      }
+      if (shippingBucket === "to_prepare") {
+        acc[productId].toPrepare += 1;
+        acc[productId].toPrepareUnits += quantity;
+      }
+      if (shippingBucket === "shipped") {
+        acc[productId].outDelivered += 1;
+        acc[productId].outDeliveredUnits += quantity;
       }
       if (shippingStatus && isShippingInProgress(shippingStatus)) {
         acc[productId].shipping += 1;
@@ -1798,6 +1811,10 @@ export default function App() {
           orderedUnits: 0,
           confirmed: 0,
           confirmedUnits: 0,
+          toPrepare: 0,
+          toPrepareUnits: 0,
+          outDelivered: 0,
+          outDeliveredUnits: 0,
           shipping: 0,
           shippingUnits: 0,
           delivered: 0,
@@ -1817,11 +1834,15 @@ export default function App() {
 
         const deliveredUnits = Number(customerMetrics.deliveredUnits || 0);
         const shippingUnits = Number(customerMetrics.shippingUnits || 0);
+        const toPrepareUnits = Number(customerMetrics.toPrepareUnits || 0);
+        const outDeliveredUnits = Number(customerMetrics.outDeliveredUnits || 0);
         const returnedUnits = Number(customerMetrics.returnedUnits || 0);
         const confirmedUnits = Number(customerMetrics.confirmedUnits || 0);
         const orderedUnits = Number(customerMetrics.orderedUnits || 0);
         const delivered = Number(customerMetrics.delivered || 0);
         const confirmed = Number(customerMetrics.confirmed || 0);
+        const toPrepare = Number(customerMetrics.toPrepare || 0);
+        const outDelivered = Number(customerMetrics.outDelivered || 0);
         const shipping = Number(customerMetrics.shipping || 0);
         const orders = Number(customerMetrics.orders || 0);
         const revenue = Number(customerMetrics.revenue || 0);
@@ -1836,8 +1857,8 @@ export default function App() {
         const deliveryRate = confirmed > 0 ? delivered / confirmed : 0;
         const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
         const initialStock = Number(product.totalQty || 0);
-        const reservedStock = Math.max(confirmedUnits - shippingUnits - deliveredUnits - returnedUnits, 0);
-        const currentStock = Math.max(initialStock - shippingUnits - deliveredUnits, 0);
+        const reservedStock = Math.max(confirmedUnits - toPrepareUnits - outDeliveredUnits - deliveredUnits - returnedUnits, 0);
+        const currentStock = Math.max(initialStock - toPrepareUnits - outDeliveredUnits - deliveredUnits + returnedUnits, 0);
         const availableStock = Math.max(currentStock - reservedStock, 0);
         const salesPerDay = deliveredUnits > 0 ? deliveredUnits / 30 : 0;
         const arrivalDays = Number(product.estimatedArrivalDays || 0);
@@ -1877,9 +1898,13 @@ export default function App() {
           orders,
           orderedUnits,
           confirmed,
+          toPrepare,
+          outDelivered,
           shipping,
           delivered,
           confirmedUnits,
+          toPrepareUnits,
+          outDeliveredUnits,
           shippingUnits,
           deliveredUnits,
           returnedOrders: customerMetrics.returned,
@@ -6563,7 +6588,7 @@ export default function App() {
                 <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
                   <thead>
                     <tr>
-                      {["Product", "Source", "Initial Stock", "Delivered", "Reserved", "Current Stock", "Available Stock", "Sales/Day", "Min Stock", "Reorder", "Forecast", "Stockout Date", "Status", "Estimated Arrival", "Arrival", "Transit Days"].map((head) => (
+                      {["Product", "Source", "Initial Stock", "In Preparation", "Out Delivered", "Delivered", "Returned", "Reserved", "In Stock", "Available", "Sales/Day", "Min Stock", "Reorder", "Forecast", "Stockout Date", "Status", "Estimated Arrival", "Arrival", "Transit Days"].map((head) => (
                         <th key={head} style={{ textAlign: "left", padding: "14px 12px", color: textSoft, fontSize: 13, borderBottom: `1px solid ${cardBorder}`, background: "#f8fafc" }}>{head}</th>
                       ))}
                     </tr>
@@ -6576,7 +6601,10 @@ export default function App() {
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{product.name}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.source || "—"}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.initialStock}</td>
+                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.toPrepareUnits}</td>
+                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.outDeliveredUnits}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.deliveredUnits}</td>
+                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.returnedUnits}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.reservedStock}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.currentStock}</td>
                           <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{product.availableStock}</td>
