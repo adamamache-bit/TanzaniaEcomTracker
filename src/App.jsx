@@ -1760,7 +1760,7 @@ export default function App() {
         const revenue = Number(customerMetrics.revenue || 0);
         const unitProductCost = getUnitProductCostUSD(product);
         const deliveryTzs = LOCAL_DELIVERY_TZS_PER_DELIVERED;
-        const logisticsOutflow = deliveredUnits * ((unitProductCost * USD_TO_TZS) + deliveryTzs);
+        const logisticsOutflow = (deliveredUnits * (unitProductCost * USD_TO_TZS)) + (delivered * deliveryTzs);
         const profit = revenue - spend - logisticsOutflow;
         const cpa = deliveredUnits > 0 ? spend / deliveredUnits : 0;
         const costPerLead = orders > 0 ? spend / orders : 0;
@@ -3690,7 +3690,7 @@ export default function App() {
       0
     );
     const localDeliveryCostTzs = productDashboard.reduce(
-      (sum, product) => sum + (Number(product.deliveredUnits || 0) * LOCAL_DELIVERY_TZS_PER_DELIVERED),
+      (sum, product) => sum + (Number(product.delivered || 0) * LOCAL_DELIVERY_TZS_PER_DELIVERED),
       0
     );
 
@@ -4163,7 +4163,7 @@ export default function App() {
         grouped[key].deliveredOrders += 1;
         grouped[key].deliveredUnits += qty;
         grouped[key].revenueTzs += getCustomerOrderTotalTzs(customer, product);
-        grouped[key].localDeliveryTzs += LOCAL_DELIVERY_TZS_PER_DELIVERED * qty;
+        grouped[key].localDeliveryTzs += LOCAL_DELIVERY_TZS_PER_DELIVERED;
         grouped[key].importCostTzs += getUnitProductCostUSD(product) * USD_TO_TZS * qty;
       }
     });
@@ -4428,7 +4428,7 @@ export default function App() {
       const liveObservedAdsTzs = Number(product.spend || 0);
       const stockPurchaseTzs = Number(product.purchaseUnitPrice || 0) * Number(product.totalQty || 0) * USD_TO_TZS;
       const importChargesTzs = Number(product.shippingTotal || 0) + Number(product.otherCharges || 0);
-      const deliveryChargesTzs = LOCAL_DELIVERY_TZS_PER_DELIVERED * Number(product.deliveredUnits || 0);
+      const deliveryChargesTzs = LOCAL_DELIVERY_TZS_PER_DELIVERED * Number(product.delivered || 0);
       const productChargesTzs = stockPurchaseTzs + importChargesTzs + deliveryChargesTzs;
 
       return {
@@ -4557,7 +4557,7 @@ export default function App() {
         const quantity = Math.max(1, Number(customer.quantity || 1));
         const revenueTzs = getCustomerOrderTotalTzs(customer, product);
         const importCostTzs = getUnitProductCostUSD(product) * USD_TO_TZS * quantity;
-        const localDeliveryTzs = LOCAL_DELIVERY_TZS_PER_DELIVERED * quantity;
+        const localDeliveryTzs = LOCAL_DELIVERY_TZS_PER_DELIVERED;
         grouped[owner].deliveredOrders += 1;
         grouped[owner].revenueTzs += revenueTzs;
         grouped[owner].profitTzs += revenueTzs - importCostTzs - localDeliveryTzs;
@@ -8213,7 +8213,7 @@ export default function App() {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(6, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<Wallet size={18} />} title="Money In" value={formatUsdFromTzs(profitCenterSummary.revenueTzs)} sub="Products sold and delivered" valueColor={green} />
-                <KpiCard icon={<Archive size={18} />} title="Product Charges" value={formatUsdFromTzs(profitCenterSummary.productChargesTzs)} sub="Purchase + import + delivery charges" valueColor={amber} />
+                <KpiCard icon={<Archive size={18} />} title="Product Charges" value={formatUsdFromTzs(profitCenterSummary.productChargesTzs)} sub="Import budget + (delivered orders x $8.5)" valueColor={amber} />
                 <KpiCard icon={<ClipboardList size={18} />} title="Ads Charges" value={formatUsdFromTzs(profitCenterSummary.adsSpendTzs)} sub={profitCenterSummary.adsSourceLabel === "Meta connected account" && profitCenterSummary.lastHourlyAdsSnapshot ? `Meta connected account | last ${profitCenterSummary.lastHourlyAdsSnapshot.bucket}` : profitCenterSummary.adsSourceLabel} valueColor={amber} />
                 <KpiCard icon={<Calculator size={18} />} title="Total Out" value={formatUsdFromTzs(profitCenterSummary.totalChargesTzs)} sub="All product charges + ads" valueColor={amber} />
                 <KpiCard icon={<TrendingUp size={18} />} title="Balance" value={formatUsdFromTzs(profitCenterSummary.balanceTzs)} sub="Money in - all charges" valueColor={Number(profitCenterSummary.balanceTzs || 0) >= 0 ? green : red} />
@@ -8226,7 +8226,7 @@ export default function App() {
                     <div style={styles.sectionEyebrow}>Net profit center</div>
                     <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Cash in, charges and balance by product</div>
                     <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>
-                      Cette vue suit une logique simple: entrees d'argent des ventes livrees, toutes les charges produit, les charges ads, puis la balance finale.
+                      Cette vue suit votre formule: Product Charge = Import budget + (commandes livrees x 8.5 USD), puis on ajoute les charges ads pour obtenir la balance finale.
                     </div>
                   </div>
                 </div>
