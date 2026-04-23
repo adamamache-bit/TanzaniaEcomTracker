@@ -480,6 +480,33 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
     setDraftRange({ start: draftRange.start, end: dateString });
   };
 
+  const updateDraftBoundary = (field, nextValue) => {
+    const safeValue = String(nextValue || "").trim();
+    if (!safeValue) {
+      setDraftRange((prev) => ({ ...prev, [field]: "" }));
+      return;
+    }
+
+    setDraftRange((prev) => {
+      const nextRange = { ...prev, [field]: safeValue };
+
+      if (field === "start" && nextRange.end && nextRange.end < safeValue) {
+        nextRange.end = safeValue;
+      }
+
+      if (field === "end" && nextRange.start && safeValue < nextRange.start) {
+        nextRange.start = safeValue;
+      }
+
+      return nextRange;
+    });
+
+    const parsed = parseDateInput(safeValue);
+    if (parsed) {
+      setLeftMonth(startOfMonth(parsed));
+    }
+  };
+
   const renderMonth = (monthDate) => {
     const days = buildCalendarMatrix(monthDate);
     const currentMonth = monthDate.getMonth();
@@ -614,9 +641,21 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr auto 1fr", "1fr auto 1fr", "1fr"), gap: 10, alignItems: "center" }}>
-                <input style={styles.input} type="text" readOnly value={draftRange.start ? formatLongDate(draftRange.start) : ""} placeholder="Start date" />
+                <input
+                  style={styles.input}
+                  type="date"
+                  value={draftRange.start || ""}
+                  onChange={(e) => updateDraftBoundary("start", e.target.value)}
+                  placeholder="Start date"
+                />
                 <div style={{ color: textSoft, fontWeight: 800, textAlign: "center" }}>-</div>
-                <input style={styles.input} type="text" readOnly value={draftRange.end ? formatLongDate(draftRange.end) : ""} placeholder="End date" />
+                <input
+                  style={styles.input}
+                  type="date"
+                  value={draftRange.end || ""}
+                  onChange={(e) => updateDraftBoundary("end", e.target.value)}
+                  placeholder="End date"
+                />
               </div>
 
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
