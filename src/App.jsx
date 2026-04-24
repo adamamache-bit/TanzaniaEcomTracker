@@ -1792,7 +1792,7 @@ export default function App() {
     const keyToIndex = new Map();
     const keysByIndex = [];
 
-    customers.forEach((customer) => {
+    customers.filter(Boolean).forEach((customer) => {
       const keys = buildOperationalCustomerKeys(customer);
 
       if (!keys.length) {
@@ -3365,8 +3365,21 @@ export default function App() {
           createdCount += 1;
         });
 
-        setCustomers(nextCustomers);
-        setImportMeta((prev) => ({ ...prev, lastOrdersImportAt: importFinishedAt }));
+        const sanitizedNextCustomers = nextCustomers.map(sanitizeCustomerRecord).filter(Boolean);
+        const nextImportMeta = { ...(importMeta || getDefaultImportMeta()), lastOrdersImportAt: importFinishedAt };
+        setCustomers(sanitizedNextCustomers);
+        setImportMeta(nextImportMeta);
+        const nextSnapshot = {
+          ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+          customers: sanitizedNextCustomers,
+          importMeta: nextImportMeta,
+        };
+        latestSharedStateRef.current = nextSnapshot;
+        void persistSharedSnapshot(nextSnapshot, {
+          progressNotice: "Saving imported leads to cloud...",
+          successNotice: "Cloud leads import synced",
+          failurePrefix: "Cloud leads import sync failed",
+        });
         setOrdersImportNotice(`Excel imported: ${createdCount} new, ${updatedCount} updated, ${skippedCount} skipped.`);
         setOrdersImportDetails({
           detectedHeaders,
@@ -3381,7 +3394,7 @@ export default function App() {
         event.target.value = "";
       }
     },
-    [customers, findMatchingCustomerIndex, getExcelCellValue, resolveImportedProductId]
+    [customers, findMatchingCustomerIndex, getExcelCellValue, importMeta, persistSharedSnapshot, resolveImportedProductId]
   );
 
   const importShippingFromExcel = useCallback(
@@ -3571,8 +3584,21 @@ export default function App() {
           updatedCount += 1;
         });
 
-        setCustomers(nextCustomers);
-        setImportMeta((prev) => ({ ...prev, lastShippingImportAt: importFinishedAt }));
+        const sanitizedNextCustomers = nextCustomers.map(sanitizeCustomerRecord).filter(Boolean);
+        const nextImportMeta = { ...(importMeta || getDefaultImportMeta()), lastShippingImportAt: importFinishedAt };
+        setCustomers(sanitizedNextCustomers);
+        setImportMeta(nextImportMeta);
+        const nextSnapshot = {
+          ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+          customers: sanitizedNextCustomers,
+          importMeta: nextImportMeta,
+        };
+        latestSharedStateRef.current = nextSnapshot;
+        void persistSharedSnapshot(nextSnapshot, {
+          progressNotice: "Saving shipping import to cloud...",
+          successNotice: "Cloud shipping import synced",
+          failurePrefix: "Cloud shipping import sync failed",
+        });
         setShippingImportNotice(
           `Shipping Excel imported: ${updatedCount} updated, ${unchangedCount} unchanged, ${skippedCount} skipped.`
         );
@@ -3589,7 +3615,7 @@ export default function App() {
         event.target.value = "";
       }
     },
-    [customers, findMatchingCustomerIndex, getExcelCellValue, resolveImportedProductId]
+    [customers, findMatchingCustomerIndex, getExcelCellValue, importMeta, persistSharedSnapshot, resolveImportedProductId]
   );
 
   const saveCustomerOrder = async () => {
