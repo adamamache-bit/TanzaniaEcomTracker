@@ -1729,8 +1729,110 @@ export default function App() {
   );
   const isCompact = viewportWidth <= 1024;
 
+  const buildOperationalCustomerKeys = useCallback((customer) => {
+    if (!customer) return [];
+
+    const keys = [];
+    const sourceOrderId = String(customer.sourceOrderId || "").trim();
+    const phone = normalizePhoneValue(customer.phone);
+    const productId = String(customer.productId || "").trim();
+    const orderDate = String(customer.orderDate || "").trim();
+    const quantity = Math.max(1, Number(customer.quantity || 1));
+    const customerName = normalizeHeaderName(customer.customerName);
+
+    if (sourceOrderId) {
+      keys.push(`source:${sourceOrderId}`);
+    }
+
+    if (phone && productId && orderDate) {
+      keys.push(`order:${phone}::${productId}::${orderDate}::${quantity}`);
+    }
+
+    if (phone && productId && customerName) {
+      keys.push(`customer:${phone}::${productId}::${customerName}::${quantity}`);
+    }
+
+    return Array.from(new Set(keys.filter(Boolean)));
+  }, []);
+
+  const getOperationalCustomerFreshness = useCallback((customer) => {
+    const shippingImportedAt = Date.parse(customer?.lastShippingImportedAt || "") || 0;
+    const importedAt = Date.parse(customer?.lastImportedAt || "") || 0;
+    const updatedAt = Date.parse(customer?.updatedAt || "") || 0;
+    const actualDeliveryDate = parseDateInput(customer?.actualDeliveryDate)?.getTime() || 0;
+    const orderDate = parseDateInput(customer?.orderDate)?.getTime() || 0;
+    return Math.max(shippingImportedAt, importedAt, updatedAt, actualDeliveryDate, orderDate);
+  }, []);
+
+  const compareOperationalCustomers = useCallback(
+    (candidate, existing) => {
+      const freshnessGap =
+        getOperationalCustomerFreshness(candidate) - getOperationalCustomerFreshness(existing);
+      if (freshnessGap !== 0) return freshnessGap;
+
+      const candidateSignals =
+        (candidate?.sourceOrderId ? 4 : 0) +
+        (candidate?.lastShippingImportedAt ? 3 : 0) +
+        (candidate?.lastImportedAt ? 2 : 0) +
+        (Number(candidate?.orderTotalTzs || 0) > 0 ? 1 : 0);
+      const existingSignals =
+        (existing?.sourceOrderId ? 4 : 0) +
+        (existing?.lastShippingImportedAt ? 3 : 0) +
+        (existing?.lastImportedAt ? 2 : 0) +
+        (Number(existing?.orderTotalTzs || 0) > 0 ? 1 : 0);
+      if (candidateSignals !== existingSignals) return candidateSignals - existingSignals;
+
+      return String(candidate?.id || "").localeCompare(String(existing?.id || ""));
+    },
+    [getOperationalCustomerFreshness]
+  );
+
+  const operationalCustomers = useMemo(() => {
+    const mergedCustomers = [];
+    const keyToIndex = new Map();
+    const keysByIndex = [];
+
+    customers.forEach((customer) => {
+      const keys = buildOperationalCustomerKeys(customer);
+
+      if (!keys.length) {
+        mergedCustomers.push(customer);
+        keysByIndex.push(new Set());
+        return;
+      }
+
+      const matchingIndexes = Array.from(
+        new Set(keys.map((key) => keyToIndex.get(key)).filter((value) => Number.isInteger(value)))
+      );
+
+      if (!matchingIndexes.length) {
+        const index = mergedCustomers.push(customer) - 1;
+        const keySet = new Set(keys);
+        keysByIndex[index] = keySet;
+        keySet.forEach((key) => keyToIndex.set(key, index));
+        return;
+      }
+
+      const targetIndex = matchingIndexes[0];
+      const existing = mergedCustomers[targetIndex];
+      const targetKeys = keysByIndex[targetIndex] || new Set();
+
+      keys.forEach((key) => {
+        targetKeys.add(key);
+        keyToIndex.set(key, targetIndex);
+      });
+      keysByIndex[targetIndex] = targetKeys;
+
+      if (compareOperationalCustomers(customer, existing) > 0) {
+        mergedCustomers[targetIndex] = customer;
+      }
+    });
+
+    return mergedCustomers;
+  }, [buildOperationalCustomerKeys, compareOperationalCustomers, customers]);
+
   const customerMetricsByProduct = useMemo(() => {
-    return customers.reduce((acc, customer) => {
+    return operationalCustomers.reduce((acc, customer) => {
       const product = getProduct(customer.productId);
       if (!product) return acc;
 
@@ -1800,7 +1902,7 @@ export default function App() {
 
       return acc;
     }, {});
-  }, [customers, getProduct]);
+  }, [getProduct, operationalCustomers]);
 
   const productDashboard = useMemo(() => {
     return products
@@ -1995,14 +2097,14 @@ export default function App() {
 
   const confirmationStatusCatalog = useMemo(() => {
     const seen = new Set(DEFAULT_CONFIRMATION_STATUSES);
-    customers.forEach((customer) => {
+    operationalCustomers.forEach((customer) => {
       const key = normalizeOrderStatus(customer.confirmationStatus || customer.status);
       if (key) seen.add(key);
     });
 
     return Array.from(seen)
       .map((status) => {
-        const count = customers.filter(
+        const count = operationalCustomers.filter(
           (customer) => normalizeOrderStatus(customer.confirmationStatus || customer.status) === status
         ).length;
         return {
@@ -2021,7 +2123,7 @@ export default function App() {
         if (b.count !== a.count) return b.count - a.count;
         return a.label.localeCompare(b.label);
       });
-  }, [customers]);
+  }, [operationalCustomers]);
 
   const confirmationStatusMap = useMemo(
     () => Object.fromEntries(confirmationStatusCatalog.map((status) => [status.value, status])),
@@ -2030,7 +2132,7 @@ export default function App() {
 
   const shippingStatusCatalog = useMemo(() => {
     const seen = new Set(DEFAULT_POST_CONFIRMATION_STATUSES);
-    customers.forEach((customer) => {
+    operationalCustomers.forEach((customer) => {
       const key = normalizeOrderStatus(
         customer.shippingStatus || (isConfirmationConfirmed(getCustomerConfirmationStatus(customer)) ? "to-prepare" : "")
       );
@@ -2039,7 +2141,7 @@ export default function App() {
 
     return Array.from(seen)
       .map((status) => {
-        const count = customers.filter((customer) => {
+        const count = operationalCustomers.filter((customer) => {
           const effectiveShippingStatus = normalizeOrderStatus(
             customer.shippingStatus || (isConfirmationConfirmed(getCustomerConfirmationStatus(customer)) ? "to-prepare" : "")
           );
@@ -2061,7 +2163,7 @@ export default function App() {
         if (b.count !== a.count) return b.count - a.count;
         return a.label.localeCompare(b.label);
       });
-  }, [customers]);
+  }, [operationalCustomers]);
 
   const shippingStatusMap = useMemo(
     () => Object.fromEntries(shippingStatusCatalog.map((status) => [status.value, status])),
@@ -2162,7 +2264,9 @@ export default function App() {
     const cutoffReached = now.getHours() >= 18;
     const lastShippingImportAt = importMeta?.lastShippingImportAt || null;
     const lastShippingImportDay = lastShippingImportAt ? formatDateInput(new Date(lastShippingImportAt)) : null;
-    const confirmedPipelineCount = customers.filter((customer) => isConfirmationConfirmed(getCustomerConfirmationStatus(customer))).length;
+    const confirmedPipelineCount = operationalCustomers.filter((customer) =>
+      isConfirmationConfirmed(getCustomerConfirmationStatus(customer))
+    ).length;
 
     return {
       isVisible: confirmedPipelineCount > 0 && cutoffReached && lastShippingImportDay !== todayLabel,
@@ -2170,7 +2274,7 @@ export default function App() {
       lastShippingImportAt,
       lastShippingImportLabel: lastShippingImportAt ? new Date(lastShippingImportAt).toLocaleString() : "No shipping import yet",
     };
-  }, [currentTime, customers, importMeta]);
+  }, [currentTime, importMeta, operationalCustomers]);
 
   const selectedMetaAccount = useMemo(
     () => metaAdsAccounts.find((account) => String(account.id) === String(metaAdsState.accountId)),
@@ -3771,14 +3875,14 @@ export default function App() {
   };
 
   const customersDashboard = useMemo(() => {
-    const totalLeads = customers.length;
-    const confirmedLeads = customers.filter((c) => isConfirmationConfirmed(getCustomerConfirmationStatus(c))).length;
-    const deliveredLeads = customers.filter((c) => isShippingDelivered(getCustomerShippingStatus(c))).length;
-    const newLeads = customers.filter((c) => isConfirmationNew(getCustomerConfirmationStatus(c))).length;
-    const cancelledLeads = customers.filter((c) => isConfirmationCancelled(getCustomerConfirmationStatus(c))).length;
+    const totalLeads = operationalCustomers.length;
+    const confirmedLeads = operationalCustomers.filter((c) => isConfirmationConfirmed(getCustomerConfirmationStatus(c))).length;
+    const deliveredLeads = operationalCustomers.filter((c) => isShippingDelivered(getCustomerShippingStatus(c))).length;
+    const newLeads = operationalCustomers.filter((c) => isConfirmationNew(getCustomerConfirmationStatus(c))).length;
+    const cancelledLeads = operationalCustomers.filter((c) => isConfirmationCancelled(getCustomerConfirmationStatus(c))).length;
     const otherLeads = totalLeads - confirmedLeads - cancelledLeads - newLeads;
 
-    const totalRevenue = customers
+    const totalRevenue = operationalCustomers
       .filter((c) => isShippingDelivered(getCustomerShippingStatus(c)))
       .reduce((sum, c) => {
         const product = products.find((p) => p.id === c.productId);
@@ -3790,7 +3894,7 @@ export default function App() {
 
     return {
       totalOrders: totalLeads,
-      totalQty: customers.reduce((sum, c) => sum + Number(c.quantity || 0), 0),
+      totalQty: operationalCustomers.reduce((sum, c) => sum + Number(c.quantity || 0), 0),
       confirmedOrders: confirmedLeads,
       deliveredOrders: deliveredLeads,
       newOrders: newLeads,
@@ -3800,7 +3904,7 @@ export default function App() {
       confirmationRate,
       deliveryRate,
     };
-  }, [customers, products]);
+  }, [operationalCustomers, products]);
 
   const liveAutomationSummary = useMemo(() => {
     const totalAdSpendTzs = tracking.reduce((sum, row) => sum + Number(row.adSpend || 0), 0);
@@ -3990,7 +4094,7 @@ export default function App() {
   const compactShippingRows = useMemo(() => {
     const searchValue = normalizeHeaderName(deferredShippingSearch);
 
-    return customers
+    return operationalCustomers
       .map((customer) => {
         const product = products.find((p) => p.id === customer.productId);
         const normalizedStatus = getCustomerShippingStatus(customer) || "to-prepare";
@@ -4033,7 +4137,7 @@ export default function App() {
         if (dateB !== dateA) return dateB - dateA;
         return String(b.id).localeCompare(String(a.id));
       });
-  }, [customers, deferredShippingSearch, products, shippingListFilters.status, shippingStatusMap]);
+  }, [deferredShippingSearch, operationalCustomers, products, shippingListFilters.status, shippingStatusMap]);
 
   const shippingListPageCount = Math.max(1, Math.ceil(compactShippingRows.length / Number(shippingListFilters.pageSize || 25)));
   const selectedShippingIdSet = useMemo(() => new Set(selectedShippingIds), [selectedShippingIds]);
@@ -5009,7 +5113,9 @@ export default function App() {
   }, [confirmationStatusCatalog, customersDashboard.totalOrders]);
 
   const deliveryDetails = useMemo(() => {
-    const confirmedCustomers = customers.filter((c) => isConfirmationConfirmed(getCustomerConfirmationStatus(c)));
+    const confirmedCustomers = operationalCustomers.filter((c) =>
+      isConfirmationConfirmed(getCustomerConfirmationStatus(c))
+    );
     const confirmedBase = confirmedCustomers.length;
     const counts = confirmedCustomers.reduce((acc, customer) => {
       const statusKey = normalizeOrderStatus(getCustomerShippingStatus(customer) || "to-prepare");
@@ -5036,7 +5142,7 @@ export default function App() {
         pct: confirmedBase > 0 ? Math.round((item.count / confirmedBase) * 100) : 0,
       })),
     };
-  }, [customers, shippingStatusMap]);
+  }, [operationalCustomers, shippingStatusMap]);
 
   const getPeriodStartDate = (period) => {
     const today = new Date();
