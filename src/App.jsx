@@ -3883,7 +3883,7 @@ export default function App() {
       ),
       "",
       "Recent Orders",
-      ...customers.slice(0, 10).map((customer) => {
+      ...operationalCustomers.slice(0, 10).map((customer) => {
         const product = getProduct(customer.productId);
         return `- ${customer.customerName} | ${product?.name || customer.productId} | qty=${customer.quantity} | status=${customer.status} | date=${customer.orderDate}`;
       }),
@@ -4044,7 +4044,7 @@ export default function App() {
   const compactCustomerRows = useMemo(() => {
     const searchValue = normalizeHeaderName(deferredCustomerSearch);
 
-    return customers
+    return operationalCustomers
       .map((customer) => {
         const product = products.find((p) => p.id === customer.productId);
         const totalValue = getCustomerOrderTotalTzs(customer, product);
@@ -4083,7 +4083,7 @@ export default function App() {
         if (dateB !== dateA) return dateB - dateA;
         return String(b.id).localeCompare(String(a.id));
       });
-  }, [confirmationStatusMap, customerListFilters.status, customers, deferredCustomerSearch, products]);
+  }, [confirmationStatusMap, customerListFilters.status, deferredCustomerSearch, operationalCustomers, products]);
 
   const customerListPageCount = Math.max(1, Math.ceil(compactCustomerRows.length / Number(customerListFilters.pageSize || 25)));
   const selectedCustomerIdSet = useMemo(() => new Set(selectedCustomerIds), [selectedCustomerIds]);
@@ -4091,8 +4091,8 @@ export default function App() {
   const allFilteredSelected = filteredCustomerIds.length > 0 && filteredCustomerIds.every((id) => selectedCustomerIdSet.has(id));
   const someFilteredSelected = filteredCustomerIds.some((id) => selectedCustomerIdSet.has(id)) && !allFilteredSelected;
   const historyTargetCustomer = useMemo(
-    () => customers.find((customer) => customer.id === customerHistoryTargetId) || null,
-    [customerHistoryTargetId, customers]
+    () => operationalCustomers.find((customer) => customer.id === customerHistoryTargetId) || null,
+    [customerHistoryTargetId, operationalCustomers]
   );
 
   const paginatedCustomerRows = useMemo(() => {
@@ -4379,7 +4379,7 @@ export default function App() {
   const weeklyProductProfitRows = useMemo(() => {
     const grouped = {};
 
-    customers.forEach((customer) => {
+    operationalCustomers.forEach((customer) => {
       const product = getProduct(customer.productId);
       if (!product) return;
 
@@ -4441,7 +4441,7 @@ export default function App() {
       if (b.profitTzs !== a.profitTzs) return b.profitTzs - a.profitTzs;
       return a.productName.localeCompare(b.productName);
     });
-  }, [customers, getProduct, productDashboardMap]);
+  }, [getProduct, operationalCustomers, productDashboardMap]);
 
   const stockForecastRows = useMemo(() => {
     return productDashboard
@@ -4595,7 +4595,7 @@ export default function App() {
 
   const teamWorkloadRows = useMemo(() => {
     const grouped = {};
-    customers.forEach((customer) => {
+    operationalCustomers.forEach((customer) => {
       const owner = String(customer.assignedTo || "").trim();
       if (!owner) return;
       if (!grouped[owner]) {
@@ -4607,17 +4607,17 @@ export default function App() {
       if (isShippingInProgress(getCustomerShippingStatus(customer))) grouped[owner].shipping += 1;
     });
     return Object.values(grouped).sort((a, b) => b.total - a.total);
-  }, [customers]);
+  }, [operationalCustomers]);
 
   const executiveSummary = useMemo(() => {
     const today = getTodayString();
     const monthStart = formatDateInput(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-    const todayOrders = customers.filter((customer) => customer.orderDate === today);
+    const todayOrders = operationalCustomers.filter((customer) => customer.orderDate === today);
     const todayRevenueTzs = todayOrders.reduce((sum, customer) => {
       if (!isShippingDelivered(getCustomerShippingStatus(customer))) return sum;
       return sum + getCustomerOrderTotalTzs(customer, getProduct(customer.productId));
     }, 0);
-    const monthRevenueTzs = customers.reduce((sum, customer) => {
+    const monthRevenueTzs = operationalCustomers.reduce((sum, customer) => {
       if (String(customer.orderDate || "") < monthStart) return sum;
       if (!isShippingDelivered(getCustomerShippingStatus(customer))) return sum;
       return sum + getCustomerOrderTotalTzs(customer, getProduct(customer.productId));
@@ -4641,7 +4641,7 @@ export default function App() {
       grossProfitTzs,
       estimatedNetAfterFixedTzs,
     };
-  }, [customers, getProduct, liveAutomationSummary.grossProfitTzs, products, situationsSummary.fixedChargesTzs, taskCenterData]);
+  }, [getProduct, liveAutomationSummary.grossProfitTzs, operationalCustomers, products, situationsSummary.fixedChargesTzs, taskCenterData]);
 
   const cashflowSummary = useMemo(() => {
     const cashInTzs = Number(liveAutomationSummary.totalRevenueTzs || 0);
@@ -4759,7 +4759,7 @@ export default function App() {
   }, [metaAdsState.cumulativeTrackedSpendTzs, metaAdsState.lastSyncSummary?.accountTotalSpendTzs, metaAdsState.lifetimeSpendTzs, productDashboard, situationData.adInputs]);
 
   const auditRows = useMemo(() => {
-    return customers
+    return operationalCustomers
       .flatMap((customer) =>
         (customer.history || []).map((entry) => ({
           ...entry,
@@ -4769,7 +4769,7 @@ export default function App() {
         }))
       )
       .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
-  }, [customers, getProduct]);
+  }, [getProduct, operationalCustomers]);
 
   const teamScorecardRows = useMemo(() => {
     const salaryLookup = {};
@@ -4782,7 +4782,7 @@ export default function App() {
     });
 
     const grouped = {};
-    customers.forEach((customer) => {
+    operationalCustomers.forEach((customer) => {
       const owner = customer.assignedTo || "Unassigned";
       const product = getProduct(customer.productId);
       const shippingStatus = getCustomerShippingStatus(customer);
@@ -4830,7 +4830,7 @@ export default function App() {
         };
       })
       .sort((a, b) => Number(b.revenueTzs || 0) - Number(a.revenueTzs || 0));
-  }, [customers, getProduct, situationData.salaries]);
+  }, [getProduct, operationalCustomers, situationData.salaries]);
 
   const deferredAuditSearch = useDeferredValue(auditSearch);
   const filteredAuditRows = useMemo(() => {
@@ -4981,8 +4981,8 @@ export default function App() {
   }, [customerListPageCount]);
 
   useEffect(() => {
-    setSelectedCustomerIds((prev) => prev.filter((id) => customers.some((customer) => customer.id === id)));
-  }, [customers]);
+    setSelectedCustomerIds((prev) => prev.filter((id) => operationalCustomers.some((customer) => customer.id === id)));
+  }, [operationalCustomers]);
 
   useEffect(() => {
     if (selectAllCustomersRef.current) {
@@ -4999,8 +4999,8 @@ export default function App() {
   }, [shippingListPageCount]);
 
   useEffect(() => {
-    setSelectedShippingIds((prev) => prev.filter((id) => customers.some((customer) => customer.id === id)));
-  }, [customers]);
+    setSelectedShippingIds((prev) => prev.filter((id) => operationalCustomers.some((customer) => customer.id === id)));
+  }, [operationalCustomers]);
 
   useEffect(() => {
     if (selectAllShippingRef.current) {
@@ -5009,7 +5009,7 @@ export default function App() {
   }, [someFilteredShippingSelected]);
 
   const ordersChartData = useMemo(() => {
-    const grouped = customers.reduce((acc, customer) => {
+    const grouped = operationalCustomers.reduce((acc, customer) => {
       const dateKey = customer.orderDate || "No date";
       const confirmationStatus = getCustomerConfirmationStatus(customer);
       const shippingStatus = getCustomerShippingStatus(customer) || getCustomerEffectiveStatus(customer);
@@ -5036,10 +5036,10 @@ export default function App() {
     return Object.values(grouped)
       .sort((a, b) => String(a.date).localeCompare(String(b.date)))
       .slice(-10);
-  }, [customers]);
+  }, [operationalCustomers]);
 
   const filteredCustomersForOverview = useMemo(() => {
-    return customers.filter((customer) => {
+    return operationalCustomers.filter((customer) => {
       const matchesProduct = overviewFilters.productId === "all" || customer.productId === overviewFilters.productId;
 
       let matchesDate = true;
@@ -5050,7 +5050,7 @@ export default function App() {
 
       return matchesProduct && matchesDate;
     });
-  }, [customers, overviewFilters]);
+  }, [operationalCustomers, overviewFilters]);
 
   const overviewSummary = useMemo(() => {
     const incoming = filteredCustomersForOverview.length;
@@ -5199,7 +5199,7 @@ export default function App() {
   const filteredCustomersForConfirmationSummary = useMemo(() => {
     const startDatePreset = getPeriodStartDate(confirmationSummaryFilters.period);
 
-    return customers.filter((customer) => {
+    return operationalCustomers.filter((customer) => {
       const matchesProduct =
         confirmationSummaryFilters.productId === "all" ||
         customer.productId === confirmationSummaryFilters.productId;
@@ -5229,7 +5229,7 @@ export default function App() {
       if (!startDatePreset) return true;
       return orderDate >= startDatePreset;
     });
-  }, [customers, confirmationSummaryFilters]);
+  }, [operationalCustomers, confirmationSummaryFilters]);
 
   const confirmationSummary = useMemo(() => {
     const totalLeads = filteredCustomersForConfirmationSummary.length;
@@ -5275,7 +5275,7 @@ export default function App() {
   const filteredCustomersForProductDetails = useMemo(() => {
     const startDatePreset = getPeriodStartDate(productDetailsFilters.period);
 
-    return customers.filter((customer) => {
+    return operationalCustomers.filter((customer) => {
       const matchesProduct = productDetailsFilters.productId === "all" || customer.productId === productDetailsFilters.productId;
       if (!matchesProduct) return false;
 
@@ -5293,7 +5293,7 @@ export default function App() {
       if (!startDatePreset) return true;
       return orderDate >= startDatePreset;
     });
-  }, [customers, productDetailsFilters]);
+  }, [operationalCustomers, productDetailsFilters]);
 
   const productDetailsRows = useMemo(() => {
     return products
