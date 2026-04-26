@@ -128,6 +128,106 @@ const AUTO_BACKUP_KEY = "tanzania-ecom-tracker-auto-backup-v1";
 const AUTO_BACKUP_META_KEY = "tanzania-ecom-tracker-auto-backup-meta-v1";
 const IMPORT_META_KEY = "tanzania-ecom-tracker-import-meta-v1";
 
+function isQuotaExceededError(error) {
+  if (!error) return false;
+  const message = String(error?.message || error || "").toLowerCase();
+  return (
+    message.includes("quota") ||
+    message.includes("storage full") ||
+    error?.name === "QuotaExceededError" ||
+    error?.code === 22 ||
+    error?.code === 1014
+  );
+}
+
+function buildCompactCustomerForBrowser(customer, { slim = false } = {}) {
+  const sanitized = sanitizeCustomerRecord(customer);
+  if (!slim) {
+    return {
+      ...sanitized,
+      history: [],
+    };
+  }
+
+  return {
+    id: sanitized.id,
+    customerName: sanitized.customerName,
+    phone: sanitized.phone,
+    city: sanitized.city,
+    productId: sanitized.productId,
+    quantity: sanitized.quantity,
+    orderDate: sanitized.orderDate,
+    paymentMethod: sanitized.paymentMethod,
+    status: sanitized.status,
+    confirmationStatus: sanitized.confirmationStatus,
+    shippingStatus: sanitized.shippingStatus,
+    orderTotalTzs: sanitized.orderTotalTzs,
+    sourceOrderId: sanitized.sourceOrderId,
+    importSource: sanitized.importSource,
+    lastImportedAt: sanitized.lastImportedAt,
+    lastShippingImportedAt: sanitized.lastShippingImportedAt,
+    assignedTo: sanitized.assignedTo,
+    history: [],
+  };
+}
+
+function buildBrowserPersistedSnapshot(source = {}, { slim = false } = {}) {
+  return {
+    products: Array.isArray(source.products) ? source.products.map(sanitizeProductRecord) : [],
+    tracking: slim ? [] : Array.isArray(source.tracking) ? source.tracking : [],
+    customers: Array.isArray(source.customers)
+      ? source.customers.map((customer) => buildCompactCustomerForBrowser(customer, { slim }))
+      : [],
+    serviceForm: sanitizeServiceForm(source.serviceForm || getDefaultServiceForm()),
+    situationData: sanitizeSituationData(source.situationData || getDefaultSituationData()),
+    metaAdsState: sanitizeMetaAdsState({
+      ...(source.metaAdsState || getDefaultMetaAdsState()),
+      accessToken: "",
+    }),
+    importMeta: {
+      lastOrdersImportAt: source.importMeta?.lastOrdersImportAt || null,
+      lastShippingImportAt: source.importMeta?.lastShippingImportAt || null,
+    },
+  };
+}
+
+function persistBrowserSnapshotSafely(snapshot, { exportedAt, onSaved } = {}) {
+  if (typeof window === "undefined") return false;
+
+  const candidates = [
+    buildBrowserPersistedSnapshot(snapshot, { slim: false }),
+    buildBrowserPersistedSnapshot(snapshot, { slim: true }),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const payload = {
+        ...candidate,
+        exportedAt: exportedAt || new Date().toISOString(),
+        version: 1,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(candidate));
+      localStorage.setItem(AUTO_BACKUP_KEY, JSON.stringify(payload));
+      const now = new Date().toISOString();
+      localStorage.setItem(AUTO_BACKUP_META_KEY, JSON.stringify({ lastAutoBackupAt: now }));
+      onSaved?.(now);
+      return true;
+    } catch (error) {
+      if (!isQuotaExceededError(error)) {
+        return false;
+      }
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(AUTO_BACKUP_KEY);
+      } catch {
+        // ignore cleanup issues
+      }
+    }
+  }
+
+  return false;
+}
+
 function readLocalWorkspaceSnapshotFromStorage() {
   if (typeof window === "undefined") return null;
 
@@ -1176,7 +1276,11 @@ export default function App() {
   }, [applySharedStateSnapshot, cloudAuth.ready, cloudAuth.user, readBrowserBackupSnapshot]);
 
   useEffect(() => {
-    localStorage.setItem(IMPORT_META_KEY, JSON.stringify(importMeta));
+    try {
+      localStorage.setItem(IMPORT_META_KEY, JSON.stringify(importMeta));
+    } catch {
+      // ignore browser quota issues for import metadata
+    }
   }, [importMeta]);
 
   useEffect(() => {
@@ -1208,18 +1312,10 @@ export default function App() {
       return;
     }
 
-    const payload = {
-      ...nextSnapshot,
+    persistBrowserSnapshotSafely(nextSnapshot, {
       exportedAt: new Date().toISOString(),
-      version: 1,
-    };
-
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextSnapshot));
-    localStorage.setItem(AUTO_BACKUP_KEY, JSON.stringify(payload));
-
-    const now = new Date().toISOString();
-    localStorage.setItem(AUTO_BACKUP_META_KEY, JSON.stringify({ lastAutoBackupAt: now }));
-    setLastAutoBackupAt(now);
+      onSaved: (now) => setLastAutoBackupAt(now),
+    });
   }, [customers, importMeta, metaAdsState, products, readBrowserBackupSnapshot, serviceForm, situationData, tracking]);
 
   useEffect(() => {
