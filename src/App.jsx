@@ -1828,17 +1828,17 @@ export default function App() {
   const buildOperationalCustomerKeys = useCallback((customer) => {
     if (!customer) return [];
 
-    const keys = [];
     const sourceOrderId = String(customer.sourceOrderId || "").trim();
+    if (sourceOrderId) {
+      return [`source:${sourceOrderId}`];
+    }
+
+    const keys = [];
     const phone = normalizePhoneValue(customer.phone);
     const productId = String(customer.productId || "").trim();
     const orderDate = String(customer.orderDate || "").trim();
     const quantity = Math.max(1, Number(customer.quantity || 1));
     const customerName = normalizeHeaderName(customer.customerName);
-
-    if (sourceOrderId) {
-      keys.push(`source:${sourceOrderId}`);
-    }
 
     if (phone && productId && orderDate) {
       keys.push(`order:${phone}::${productId}::${orderDate}::${quantity}`);
@@ -3156,15 +3156,13 @@ export default function App() {
     const normalizedOrderDate = String(payload.orderDate || "").trim();
     const normalizedQuantity = payload.quantity ? Number(payload.quantity) : null;
 
-    return customerList.findIndex((customer) => {
-      if (
-        normalizedSourceOrderId &&
-        customer.sourceOrderId &&
-        String(customer.sourceOrderId).trim() === normalizedSourceOrderId
-      ) {
-        return true;
-      }
+    if (normalizedSourceOrderId) {
+      return customerList.findIndex((customer) => {
+        return Boolean(customer?.sourceOrderId) && String(customer.sourceOrderId).trim() === normalizedSourceOrderId;
+      });
+    }
 
+    return customerList.findIndex((customer) => {
       const customerPhone = normalizePhoneValue(customer.phone);
       const samePhone = normalizedPhone && customerPhone === normalizedPhone;
       const sameProduct = payload.productId ? customer.productId === payload.productId : true;
