@@ -662,10 +662,6 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
     typeof window === "undefined"
       ? 980
       : Math.min(980, Math.max(320, window.innerWidth - 32));
-  const triggerRect =
-    typeof window !== "undefined" && triggerRef.current
-      ? triggerRef.current.getBoundingClientRect()
-      : null;
   const popupMaxHeight =
     typeof window !== "undefined"
       ? Math.max(320, window.innerHeight - 32)
@@ -2823,16 +2819,6 @@ export default function App() {
       setMetaAdsLoading((prev) => ({ ...prev, insights: false }));
     }
   }, [fetchMetaInsightsPayload, handleMetaRequestError, importMetaInsightsPayload, metaAdsState.autoSync, metaAdsState.dateEnd, metaAdsState.dateStart, syncMetaTotalSpend]);
-
-  const updateMetaCampaignMapping = (campaignId, productId) => {
-    setMetaAdsState((prev) => ({
-      ...prev,
-      campaignMappings: {
-        ...prev.campaignMappings,
-        [campaignId]: productId,
-      },
-    }));
-  };
 
   const applyMetaInsightsToApp = () => {
     setMetaAdsLoading((prev) => ({ ...prev, apply: true }));
