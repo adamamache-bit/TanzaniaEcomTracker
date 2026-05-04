@@ -130,6 +130,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
+import { checkNormalizedTablesEmpty, migrateWorkspaceToNormalizedTables, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -879,6 +880,7 @@ export default function App() {
   const sharedHydratingRef = useRef(false);
   const sharedVersionRef = useRef(0);
   const lastSharedPayloadRef = useRef("");
+  const normalizedInitRef = useRef(false);
   const latestSharedStateRef = useRef({});
   const queuedSharedSnapshotRef = useRef(null);
   const initialBrowserSnapshotRef = useRef(null);
@@ -900,6 +902,7 @@ export default function App() {
   const [simProductName, setSimProductName] = useState("");
   const [migrateNotice, setMigrateNotice] = useState("");
   const [migrating, setMigrating] = useState(false);
+  const [syncNotice, setSyncNotice] = useState("");
   const [settingsAuditTab, setSettingsAuditTab] = useState("workspace");
   const [showCloudBackups, setShowCloudBackups] = useState(false);
   const [_aiBriefExpanded, _setAiBriefExpanded] = useState(false);
@@ -1332,6 +1335,21 @@ export default function App() {
                 ? "Cloud workspace was empty - keeping local data"
                 : "Cloud workspace connected",
           });
+          if (!normalizedInitRef.current && supabaseEnabled) {
+            normalizedInitRef.current = true;
+            const migSource = remoteHasData ? remoteState : shouldKeepLocal ? localSnapshot : browserBackupSnapshot;
+            if (migSource && hasMeaningfulWorkspaceData(migSource)) {
+              checkNormalizedTablesEmpty(supabaseWorkspaceId)
+                .then((isEmpty) => {
+                  if (!isEmpty) return null;
+                  return migrateWorkspaceToNormalizedTables(migSource, supabaseWorkspaceId);
+                })
+                .then((res) => {
+                  if (res?.success) setSyncNotice(`Data synced to cloud ✓ — ${res.counts.products} products, ${res.counts.orders} orders`);
+                })
+                .catch(() => null);
+            }
+          }
           return;
         }
 
@@ -1581,6 +1599,9 @@ export default function App() {
               notice: "",
             };
           });
+        }
+        if (supabaseEnabled && cloudAuth.user) {
+          void syncNormalizedTables(nextSnapshot, supabaseWorkspaceId);
         }
         return true;
       } catch (error) {
@@ -3001,6 +3022,15 @@ export default function App() {
           ...prev,
           notice: `JSON backup restored from ${file.name}`,
         }));
+        if (supabaseEnabled) {
+          migrateWorkspaceToNormalizedTables(snapshot, supabaseWorkspaceId)
+            .then((res) => {
+              if (res?.success) {
+                setSyncNotice(`Restore synced to cloud ✓ — ${res.counts.products} products, ${res.counts.orders} orders`);
+              }
+            })
+            .catch(() => null);
+        }
       } catch (error) {
         setSharedWorkspace((prev) => ({
           ...prev,
@@ -10460,6 +10490,11 @@ export default function App() {
                       {migrateNotice ? (
                         <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 12, background: migrateNotice.startsWith("Migration complete") ? "rgba(21,143,99,0.08)" : "rgba(217,72,95,0.08)", color: migrateNotice.startsWith("Migration complete") ? green : red, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
                           {migrateNotice}
+                        </div>
+                      ) : null}
+                      {syncNotice ? (
+                        <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 12, background: "rgba(21,143,99,0.08)", color: green, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+                          {syncNotice}
                         </div>
                       ) : null}
                     </div>
