@@ -130,7 +130,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
-import { checkNormalizedTablesEmpty, migrateWorkspaceToNormalizedTables, syncNormalizedTables } from "./lib/supabaseSync";
+import { checkNormalizedTablesEmpty, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -1347,18 +1347,50 @@ export default function App() {
         const shouldKeepLocal = !remoteHasData && localHasData;
 
         if (cloudMode) {
+          let resolvedState = remoteState;
+          let recoveredFromNormalized = false;
+
           if (remoteHasData) {
-            applySharedStateSnapshot(remoteState);
+            console.log("[Supabase] workspace blob loaded:", remoteState.products?.length, "products,", remoteState.customers?.length, "orders");
             lastSharedPayloadRef.current = JSON.stringify(remoteState);
-          } else if (shouldKeepLocal) {
-            lastSharedPayloadRef.current = "";
-          } else if (browserBackupSnapshot) {
-            applySharedStateSnapshot(browserBackupSnapshot);
-            lastSharedPayloadRef.current = "";
           } else {
-            applySharedStateSnapshot(remoteState);
-            lastSharedPayloadRef.current = JSON.stringify(remoteState);
+            // workspace blob empty — try normalized tables as fallback
+            console.log("[Supabase] workspace blob empty, checking normalized tables...");
+            let normalizedSnapshot = null;
+            try {
+              normalizedSnapshot = await loadWorkspaceFromNormalizedTables(supabaseWorkspaceId);
+              console.log("[Supabase] normalized tables:", normalizedSnapshot?.products?.length ?? 0, "products,", normalizedSnapshot?.customers?.length ?? 0, "orders,", normalizedSnapshot?.tracking?.length ?? 0, "tracking rows");
+            } catch (e) {
+              console.warn("[Supabase] normalized tables load failed:", e.message);
+            }
+
+            if (normalizedSnapshot && hasMeaningfulWorkspaceData(normalizedSnapshot)) {
+              resolvedState = normalizedSnapshot;
+              recoveredFromNormalized = true;
+              lastSharedPayloadRef.current = "";
+              // Write back to workspace blob so future loads are fast
+              try {
+                await saveCloudWorkspace(resolvedState, {
+                  workspaceId: supabaseWorkspaceId,
+                  userId: cloudAuth.user.id,
+                  backupReason: "table-recovery",
+                });
+                console.log("[Supabase] workspace blob restored from normalized tables");
+              } catch (e) {
+                console.warn("[Supabase] blob restore failed:", e.message);
+              }
+            } else if (shouldKeepLocal) {
+              resolvedState = localSnapshot;
+              lastSharedPayloadRef.current = "";
+            } else if (browserBackupSnapshot) {
+              resolvedState = browserBackupSnapshot;
+              lastSharedPayloadRef.current = "";
+            } else {
+              lastSharedPayloadRef.current = JSON.stringify(remoteState);
+            }
           }
+
+          applySharedStateSnapshot(resolvedState);
           sharedVersionRef.current = Number(payload.version || 0);
           setSharedWorkspace({
             mode: "cloud",
@@ -1368,16 +1400,18 @@ export default function App() {
             initialized: true,
             version: Number(payload.version || 0),
             updatedAt: payload.updatedAt || null,
-            notice: recoveredFromBrowserBackup
-              ? "Recovered cloud data from browser backup"
-              : shouldKeepLocal
-                ? "Cloud workspace was empty - keeping local data"
-                : "Cloud workspace connected",
+            notice: recoveredFromNormalized
+              ? "Cloud workspace restored from tables"
+              : recoveredFromBrowserBackup
+                ? "Recovered cloud data from browser backup"
+                : shouldKeepLocal
+                  ? "Cloud workspace was empty - keeping local data"
+                  : "Cloud workspace connected",
           });
           if (!normalizedInitRef.current && supabaseEnabled) {
             normalizedInitRef.current = true;
-            const migSource = remoteHasData ? remoteState : shouldKeepLocal ? localSnapshot : browserBackupSnapshot;
-            if (migSource && hasMeaningfulWorkspaceData(migSource)) {
+            const migSource = hasMeaningfulWorkspaceData(resolvedState) ? resolvedState : null;
+            if (migSource && !recoveredFromNormalized) {
               checkNormalizedTablesEmpty(supabaseWorkspaceId)
                 .then((isEmpty) => {
                   if (!isEmpty) return null;

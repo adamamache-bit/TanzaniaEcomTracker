@@ -32,7 +32,7 @@ async function syncProducts(products, workspaceId) {
     next_arrival_check_date: p.nextArrivalCheckDate || null,
     stock_arrived_at: p.stockArrivedAt || null,
     offers: Array.isArray(p.offers) ? p.offers : [],
-    extra: {},
+    extra: { mappingCode: p.mappingCode || "" },
     updated_at: new Date().toISOString(),
   }));
   const { error } = await supabase
@@ -179,6 +179,121 @@ export async function syncNormalizedTables(snapshot = {}, workspaceId = supabase
     syncSettings(snapshot, workspaceId),
     syncAuditTrail(snapshot.customers, workspaceId),
   ]);
+}
+
+// ── READ: reconstruct workspace state from normalized tables ─────────────────
+
+function rowToProduct(row) {
+  return {
+    id: row.id,
+    name: row.name || "",
+    source: row.source || "china",
+    sellingPrice: Number(row.selling_price || 0),
+    purchaseUnitPrice: Number(row.purchase_unit_price || 0),
+    totalQty: Number(row.total_qty || 0),
+    shippingTotal: Number(row.shipping_total || 0),
+    otherCharges: Number(row.other_charges || 0),
+    delivery: Number(row.delivery || 0),
+    estimatedArrivalDays: Number(row.estimated_arrival_days || 0),
+    stockArrivalStatus: row.stock_arrival_status || "arrived",
+    stockOrderedAt: row.stock_ordered_at || null,
+    nextArrivalCheckDate: row.next_arrival_check_date || null,
+    stockArrivedAt: row.stock_arrived_at || null,
+    offers: Array.isArray(row.offers) ? row.offers : [],
+    mappingCode: row.extra?.mappingCode || "",
+  };
+}
+
+function rowToCustomer(row) {
+  return {
+    id: row.id,
+    customerName: row.customer_name || "",
+    phone: row.phone || "",
+    city: row.city || "",
+    address: row.address || "",
+    productId: row.product_id || "",
+    quantity: Number(row.quantity || 1),
+    orderDate: row.order_date || null,
+    paymentMethod: row.payment_method || "COD",
+    notes: row.notes || "",
+    leadSource: row.lead_source || "facebook",
+    campaignName: row.campaign_name || "",
+    adsetName: row.adset_name || "",
+    creativeName: row.creative_name || "",
+    priority: row.priority || "normal",
+    customerType: row.customer_type || "new",
+    callAttempts: Number(row.call_attempts || 0),
+    cancelReason: row.cancel_reason || "",
+    unreachedReason: row.unreached_reason || "",
+    carrierName: row.carrier_name || "",
+    trackingNumber: row.tracking_number || "",
+    expectedDeliveryDate: row.expected_delivery_date || null,
+    actualDeliveryDate: row.actual_delivery_date || null,
+    returnReason: row.return_reason || "",
+    orderTotalTzs: Number(row.order_total_tzs || 0),
+    amount_tsh: Number(row.amount_tsh || 0),
+    amount_usd: Number(row.amount_usd || 0),
+    sourceOrderId: row.source_order_id || null,
+    importSource: row.import_source || null,
+    lastImportedAt: row.last_imported_at || null,
+    lastShippingImportedAt: row.last_shipping_imported_at || null,
+    updatedAt: row.updated_at || null,
+    confirmation_updated_at: row.confirmation_updated_at || null,
+    assignedTo: row.assigned_to || "",
+    confirmationStatus: row.confirmation_status || "",
+    shippingStatus: row.shipping_status || "",
+    status: row.status || "",
+    history: Array.isArray(row.history) ? row.history : [],
+    raw_row_data: row.extra?.raw_row_data || null,
+    extra_fields: row.extra?.extra_fields || {},
+  };
+}
+
+function rowToTracking(row) {
+  return {
+    id: row.id,
+    productId: row.product_id || "",
+    adSpend: Number(row.ad_spend || 0),
+    orders: Number(row.orders || 0),
+    confirmed: Number(row.confirmed || 0),
+    delivered: Number(row.delivered || 0),
+    name: row.name || "",
+    dateStart: row.date_start || null,
+    dateEnd: row.date_end || null,
+    metaManaged: Boolean(row.meta_managed),
+    metaImportedAt: row.meta_imported_at || null,
+    metaCurrency: row.meta_currency || "USD",
+  };
+}
+
+export async function loadWorkspaceFromNormalizedTables(workspaceId = supabaseWorkspaceId) {
+  if (!supabaseEnabled || !supabase) return null;
+
+  const [productsRes, ordersRes, trackingRes, settingsRes] = await Promise.all([
+    supabase.from("products").select("*").eq("workspace_id", workspaceId),
+    supabase.from("orders").select("*").eq("workspace_id", workspaceId),
+    supabase.from("tracking").select("*").eq("workspace_id", workspaceId),
+    supabase.from("settings").select("*").eq("workspace_id", workspaceId),
+  ]);
+
+  const products = (productsRes.data || []).map(rowToProduct);
+  const customers = (ordersRes.data || []).map(rowToCustomer);
+  const tracking = (trackingRes.data || []).map(rowToTracking);
+
+  const settingsMap = {};
+  for (const row of settingsRes.data || []) {
+    settingsMap[row.key] = row.value;
+  }
+
+  return {
+    products,
+    customers,
+    tracking,
+    serviceForm: settingsMap.serviceForm || null,
+    situationData: settingsMap.situationData || null,
+    metaAdsState: settingsMap.metaAdsState ? { ...settingsMap.metaAdsState, accessToken: "" } : null,
+    importMeta: settingsMap.importMeta || null,
+  };
 }
 
 // Full migration with result report (used for auto-migration and manual button).
