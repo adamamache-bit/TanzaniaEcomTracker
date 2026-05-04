@@ -1,6 +1,7 @@
 import { DEFAULT_EXCHANGE_RATE, tshToUsd, usdToTsh } from "./currency";
 import { calculateProductServiceFee, calculateTotalServiceFee, calculateLandedCostPerUnit } from "./stockCalculations";
 import { isDeliveredStatus, isConfirmedStatus, isReturnedStatus, isPendingShippingStatus } from "../config/statusMapping";
+import { deduplicateCampaigns } from "./adsMapping";
 
 function toNumber(value) {
   const parsed = Number(value);
@@ -49,7 +50,7 @@ export function calculateProductFinancials(product = {}, orders = [], campaigns 
     exchangeRate
   );
   const revenueTsh = deliveredOrders.reduce((sum, order) => sum + getOrderRevenueAmounts(order, product, exchangeRate).revenueTsh, 0);
-  const adsSpendTsh = campaigns.reduce((sum, campaign) => sum + Math.max(0, toNumber(campaign.spendTsh ?? campaign.adSpend ?? 0)), 0);
+  const adsSpendTsh = deduplicateCampaigns(campaigns).reduce((sum, campaign) => sum + Math.max(0, toNumber(campaign.spendTsh ?? campaign.adSpend ?? 0)), 0);
   const productCostUsd = deliveredUnits * landedCostPerUnitUsd;
   const productCostTsh = usdToTsh(productCostUsd, exchangeRate);
   const serviceFee = calculateProductServiceFee(product.id, deliveredOrders, { exchangeRate, ...settings });
@@ -71,6 +72,35 @@ export function calculateProductFinancials(product = {}, orders = [], campaigns 
     profitTsh,
     marginPct: revenueUsd > 0 ? (profitUsd / revenueUsd) * 100 : null,
   };
+}
+
+// Section 11 — WINNER / TESTING / LOSS / RESTOCK / WATCH
+export function getProductDecisionStatus(metrics = {}, thresholds = {}) {
+  const minOrders = Math.max(1, toNumber(thresholds.minDeliveredOrders ?? 5));
+  const minAdSpendUsd = Math.max(0, toNumber(thresholds.minAdSpendForDecision ?? 0));
+  const minMarginPct = toNumber(thresholds.winnerMarginPct ?? 10);
+  const maxCpaUsd = toNumber(thresholds.breakEvenCpaUsd ?? 0);
+  const lowStockQty = Math.max(0, toNumber(thresholds.minStockQuantity ?? 3));
+
+  const deliveredUnits = toNumber(metrics.deliveredUnits ?? metrics.deliveredOrders ?? 0);
+  const profitUsd = toNumber(metrics.profitUsd ?? 0);
+  const marginPct = metrics.marginPct ?? null;
+  const cpaUsd = toNumber(metrics.cpaUsd ?? 0);
+  const stockQty = toNumber(metrics.availableStock ?? metrics.stockQty ?? 0);
+  const adsSpendUsd = toNumber(metrics.adsSpendUsd ?? 0);
+
+  const hasEnoughData = deliveredUnits >= minOrders || (minAdSpendUsd > 0 && adsSpendUsd >= minAdSpendUsd);
+  if (!hasEnoughData) return "testing";
+
+  if (profitUsd < 0) return "loss";
+
+  if (profitUsd > 0 && stockQty <= lowStockQty) return "restock";
+
+  const marginOk = marginPct === null || marginPct >= minMarginPct;
+  const cpaOk = maxCpaUsd <= 0 || cpaUsd <= 0 || cpaUsd <= maxCpaUsd;
+  if (profitUsd > 0 && marginOk && cpaOk) return "winner";
+
+  return "watch";
 }
 
 export function calculateGlobalBusinessMetrics({ products = [], orders = [], productCampaigns = {}, unmappedAdsTsh = 0, salariesTsh = 0, toolsTsh = 0, extraGlobalChargesTsh = 0, otherGlobalExpensesTsh = 0, ownerInjectionTsh = 0, exchangeRate = DEFAULT_EXCHANGE_RATE } = {}) {
@@ -152,6 +182,8 @@ export function buildCalculationAudit({ orders = [], products = [], productCampa
     extraGlobalChargesTsh,
     otherGlobalExpensesTsh,
     ownerInjectionTsh,
+    totalMappedAdsTsh: globalMetrics.totalMappedAdsTsh,
+    totalMappedAdsUsd: globalMetrics.totalMappedAdsUsd,
     unmappedAdsTsh: globalMetrics.unmappedAdsTsh,
     unmappedAdsUsd: globalMetrics.unmappedAdsUsd,
     businessProfitWithoutInjectionTsh: globalMetrics.businessProfitWithoutInjectionTsh,

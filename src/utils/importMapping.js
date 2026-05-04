@@ -108,7 +108,8 @@ export function parseImportedExcelRows(rows = [], { exchangeRate = DEFAULT_EXCHA
       const quantity = quantityNumbers[lineIndex];
       const allocatedRevenueTsh = amountTsh > 0 ? (amountTsh * allocationWeights[lineIndex]) / totalWeight : 0;
       const resolvedProductId = typeof resolveProductId === "function" ? resolveProductId(productRef || productName) : "";
-      const fallbackKey = `${normalizedPhone}::${normalizeHeaderName(productRef || productName)}`;
+      const productIdentifier = normalizeHeaderName(productRef || productName) || "unknown-product";
+      const fallbackKey = `${normalizedPhone}::${productIdentifier}`;
       const importKey = orderId ? `${orderId}::${lineIndex}` : `${fallbackKey}::${lineIndex}`;
 
       parsedRows.push({

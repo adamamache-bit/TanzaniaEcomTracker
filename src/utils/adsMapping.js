@@ -13,7 +13,7 @@ function toNumber(value) {
 
 // Deduplicate campaigns by campaignId + date to prevent double-counting
 // when the same campaign appears in overlapping Meta sync windows.
-function deduplicateCampaigns(campaigns) {
+export function deduplicateCampaigns(campaigns) {
   const seen = new Set();
   return campaigns.filter((campaign) => {
     const id = String(campaign?.id ?? campaign?.campaignId ?? campaign?.campaign_id ?? "");
