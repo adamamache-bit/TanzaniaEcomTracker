@@ -367,6 +367,7 @@ export function matchProductIdFromText(value, products) {
   const query = normalizeHeaderName(value);
   if (!query) return "";
 
+  // 1. Exact match (case-insensitive, normalized)
   const directMatch = products.find(
     (product) =>
       normalizeHeaderName(product.id) === query ||
@@ -374,18 +375,29 @@ export function matchProductIdFromText(value, products) {
   );
   if (directMatch) return directMatch.id;
 
+  // 2. Partial/contains match: query contains product name OR product name contains query
+  const containsMatch = products.find((product) => {
+    const productName = normalizeHeaderName(product.name);
+    return productName && (query.includes(productName) || productName.includes(query));
+  });
+  if (containsMatch) return containsMatch.id;
+
+  // 3. Word-by-word: 2+ matching words required
   const queryTokens = query.split(" ").filter(Boolean);
   const scored = products
     .map((product) => {
-      const productTokens = normalizeHeaderName(product.name).split(" ").filter(Boolean);
-      const intersection = queryTokens.filter((token) => productTokens.includes(token)).length;
-      const startsWithBonus = normalizeHeaderName(product.name).startsWith(query) ? 2 : 0;
+      const productName = normalizeHeaderName(product.name);
+      const productTokens = productName.split(" ").filter(Boolean);
+      const wordMatches = queryTokens.filter((token) => productTokens.includes(token)).length;
+      const startsWithBonus = productName.startsWith(query) ? 2 : 0;
       return {
         id: product.id,
-        score: intersection + startsWithBonus,
+        score: wordMatches + startsWithBonus,
+        wordMatches,
+        startsWithBonus,
       };
     })
-    .filter((entry) => entry.score > 0)
+    .filter((entry) => entry.wordMatches >= 2 || entry.startsWithBonus > 0)
     .sort((a, b) => b.score - a.score);
 
   return scored[0]?.id || "";

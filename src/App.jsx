@@ -4231,8 +4231,6 @@ export default function App() {
           }
           if (!productId) {
             unmatchedProducts.add(String(row.product_name || row.product_ref || "").trim());
-            skippedCount += 1;
-            return;
           }
 
           const normalizedConfirmation = normalizeStatus(row.confirmation_status_raw);
@@ -4341,7 +4339,8 @@ export default function App() {
               phone: row.phone,
               city: row.city,
               address: row.address,
-              productId,
+              productId: productId || "",
+              product_name_raw: productId ? "" : String(row.product_name || row.product_ref || "").trim(),
               quantity: row.quantity,
               orderDate: excelDateToInput(row.created_at),
               paymentMethod: "COD",
@@ -4373,7 +4372,7 @@ export default function App() {
                 buildHistoryEntry({
                   action: "orders_import_created",
                   source: "excel-orders",
-                  details: `Imported with ${formatStatusLabel(confirmationStatus)}${shippingStatus ? ` | shipping ${formatStatusLabel(shippingStatus)}` : ""}`,
+                  details: `Imported with ${formatStatusLabel(confirmationStatus)}${shippingStatus ? ` | shipping ${formatStatusLabel(shippingStatus)}` : ""}${!productId ? ` | unmatched product: ${String(row.product_name || "").trim()}` : ""}`,
                 }),
               ],
             })
@@ -4397,21 +4396,24 @@ export default function App() {
           successNotice: "Cloud leads import synced",
           failurePrefix: "Cloud leads import sync failed",
         });
-        setOrdersImportNotice(`Excel imported: ${createdCount} new, ${updatedCount} updated, ${skippedCount} skipped.`);
+        const unmatchedCount = unmatchedProducts.size;
+        setOrdersImportNotice(
+          `Excel imported: ${createdCount} new, ${updatedCount} updated, ${skippedCount} skipped${unmatchedCount ? `, ${unmatchedCount} unmatched product(s) imported anyway` : ""}.`
+        );
         setOrdersImportDetails({
           detectedHeaders,
           reasonCounts: {
             missingName: 0,
             missingPhone: report.missingPhoneRows,
             missingProduct: report.missingProductRows,
-            unknownProduct: unmatchedProducts.size,
+            unknownProduct: unmatchedCount,
             missingCode: report.missingCodeRows,
             missingAmount: report.missingAmountRows,
             unknownConfirmationStatuses: unknownConfirmationStatuses.size,
             unknownShippingStatuses: unknownShippingStatuses.size,
             statusChangesDetected: report.statusChangesDetected,
           },
-          unmatchedProducts: Array.from(unmatchedProducts).slice(0, 6),
+          unmatchedProducts: Array.from(unmatchedProducts).slice(0, 10),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Excel import failed";
@@ -8211,11 +8213,12 @@ export default function App() {
                           Detected headers: {ordersImportDetails.detectedHeaders.length ? ordersImportDetails.detectedHeaders.join(" | ") : "N/A"}
                         </div>
                         <div>
-                          Skip reasons: missing name {ordersImportDetails.reasonCounts.missingName}, missing phone {ordersImportDetails.reasonCounts.missingPhone}, missing product {ordersImportDetails.reasonCounts.missingProduct}, unknown product {ordersImportDetails.reasonCounts.unknownProduct}
+                          Skip reasons: missing name {ordersImportDetails.reasonCounts.missingName}, missing phone {ordersImportDetails.reasonCounts.missingPhone}, missing product {ordersImportDetails.reasonCounts.missingProduct}
+                          {ordersImportDetails.reasonCounts.unknownProduct > 0 ? ` | imported with unmatched product: ${ordersImportDetails.reasonCounts.unknownProduct}` : ""}
                         </div>
                         {ordersImportDetails.unmatchedProducts.length ? (
                           <div>
-                            Unmatched product examples: {ordersImportDetails.unmatchedProducts.join(" | ")}
+                            Unmatched products (imported anyway): {ordersImportDetails.unmatchedProducts.join(" | ")}
                           </div>
                         ) : null}
                       </div>
