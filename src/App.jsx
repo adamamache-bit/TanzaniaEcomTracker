@@ -868,6 +868,44 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
   );
 }
 
+function generateMappingCode(name, existingProducts, excludeId) {
+  const words = String(name || "").trim().split(/\s+/).filter(Boolean);
+  const seenInitials = new Set();
+  let code = "";
+
+  for (const word of words) {
+    const parts = word.split("-").filter(Boolean);
+    for (const part of parts) {
+      const letterMatches = part.match(/[a-zA-Z]+/g);
+      const digitMatches = part.match(/\d+/g);
+      const letters = letterMatches ? letterMatches.join("") : "";
+      const digits = digitMatches ? digitMatches.join("") : "";
+
+      if (letters) {
+        const isAcronym = letters === letters.toUpperCase() && letters.length > 1;
+        const isShort = letters.length <= 2;
+        const token = (isAcronym || isShort) ? letters.toUpperCase() : letters[0].toUpperCase();
+        if (token.length === 1 && seenInitials.has(token)) continue;
+        token.split("").forEach((ch) => seenInitials.add(ch));
+        code += token + digits;
+      } else if (digits) {
+        code += digits;
+      }
+    }
+  }
+
+  if (!code) return "";
+
+  const taken = (Array.isArray(existingProducts) ? existingProducts : [])
+    .filter((p) => (excludeId ? p.id !== excludeId : true))
+    .map((p) => (p.mappingCode || "").toUpperCase());
+
+  if (!taken.includes(code)) return code;
+  let n = 2;
+  while (taken.includes(`${code}${n}`)) n++;
+  return `${code}${n}`;
+}
+
 export default function App() {
   const ordersImportInputRef = useRef(null);
   const shippingImportInputRef = useRef(null);
@@ -903,6 +941,7 @@ export default function App() {
   const [migrateNotice, setMigrateNotice] = useState("");
   const [migrating, setMigrating] = useState(false);
   const [syncNotice, setSyncNotice] = useState("");
+  const [clearProductsConfirm, setClearProductsConfirm] = useState(false);
   const [settingsAuditTab, setSettingsAuditTab] = useState("workspace");
   const [showCloudBackups, setShowCloudBackups] = useState(false);
   const [_aiBriefExpanded, _setAiBriefExpanded] = useState(false);
@@ -3888,6 +3927,9 @@ export default function App() {
     const source = expeditionForm.source || "china";
     const normalizedProduct = {
       name: expeditionForm.name.trim(),
+      mappingCode: expeditionForm.mappingCode
+        ? expeditionForm.mappingCode.toUpperCase().replace(/[^A-Z0-9]/g, "")
+        : generateMappingCode(expeditionForm.name.trim(), products, editingProductId || undefined),
       source,
       sellingPrice: Number(expeditionForm.sellingPrice || 0),
       purchaseUnitPrice: Number(expeditionForm.purchaseUnitPrice || 0),
@@ -3954,6 +3996,7 @@ export default function App() {
     setEditingProductId(product.id);
     setExpeditionForm({
       name: product.name || "",
+      mappingCode: product.mappingCode || generateMappingCode(product.name || "", products, product.id),
       source: product.source || "china",
       sellingPrice: Number(product.sellingPrice || 0),
       purchaseUnitPrice: Number(product.purchaseUnitPrice || 0),
@@ -4030,6 +4073,23 @@ export default function App() {
       setEditingProductId(null);
       setExpeditionForm(getEmptyExpeditionForm());
     }
+  };
+
+  const handleClearAllProducts = () => {
+    const nextSnapshot = {
+      ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+      products: [],
+    };
+    setProducts([]);
+    setEditingProductId(null);
+    setExpeditionForm(getEmptyExpeditionForm());
+    setClearProductsConfirm(false);
+    latestSharedStateRef.current = nextSnapshot;
+    void persistSharedSnapshot(nextSnapshot, {
+      progressNotice: "Clearing products...",
+      successNotice: "All products deleted",
+      failurePrefix: "Clear products failed",
+    });
   };
 
   const resolveImportedProductId = useCallback(
@@ -7363,7 +7423,36 @@ export default function App() {
                 <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(2, minmax(0, 1fr))", "1fr", "1fr"), gap: 16 }}>
                 <div style={styles.fieldBlock}>
                   <label style={styles.fieldLabel}>Product Name</label>
-                  <input style={styles.input} placeholder="Ex: Electric Callus Remover" value={expeditionForm.name} onChange={(e) => setExpeditionForm({ ...expeditionForm, name: e.target.value })} />
+                  <input
+                    style={styles.input}
+                    placeholder="Ex: Electric Callus Remover"
+                    value={expeditionForm.name}
+                    onChange={(e) => {
+                      const name = e.target.value;
+                      setExpeditionForm((prev) => ({
+                        ...prev,
+                        name,
+                        mappingCode: generateMappingCode(name, products, editingProductId || undefined),
+                      }));
+                    }}
+                  />
+                </div>
+                <div style={styles.fieldBlock}>
+                  <label style={styles.fieldLabel}>Mapping Code</label>
+                  <input
+                    style={styles.input}
+                    placeholder="Auto-generated"
+                    value={expeditionForm.mappingCode || ""}
+                    onChange={(e) =>
+                      setExpeditionForm((prev) => ({
+                        ...prev,
+                        mappingCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""),
+                      }))
+                    }
+                  />
+                  <div style={{ fontSize: 11, color: textSoft, marginTop: 5 }}>
+                    Auto-generated · uppercase + numbers only · editable
+                  </div>
                 </div>
                 <div style={styles.fieldBlock}>
                   <label style={styles.fieldLabel}>Source (China / Dubai)</label>
@@ -7483,6 +7572,21 @@ export default function App() {
                 description="Manage the product catalog, unit economics and stock structure from one focused operating page."
                 action={(
                   <>
+                    {clearProductsConfirm ? (
+                      <>
+                        <span style={{ fontSize: 13, color: red, fontWeight: 700 }}>Delete all products?</span>
+                        <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca" }} onClick={handleClearAllProducts}>
+                          Yes, delete all
+                        </button>
+                        <button style={styles.btnSecondary} onClick={() => setClearProductsConfirm(false)}>
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button style={{ ...styles.btnSecondary, color: red, borderColor: "#fecaca" }} onClick={() => setClearProductsConfirm(true)}>
+                        Clear all products
+                      </button>
+                    )}
                     <button style={styles.btnSecondary} onClick={() => { setActivePage("stock"); setProductsStockTab("advanced"); }}>
                       Stock board
                     </button>
@@ -7667,6 +7771,24 @@ export default function App() {
                               <td style={{ padding: "16px 14px", borderBottom: `1px solid ${cardBorder}` }}>
                                 <div style={{ fontWeight: 800 }}>{p.name}</div>
                                 <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>{p.id}</div>
+                                {p.mappingCode ? (
+                                  <div style={{ marginTop: 8 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                      <span style={{ ...styles.badge, background: "rgba(199,131,34,0.1)", color: amber, border: "1px solid rgba(199,131,34,0.2)", fontFamily: "monospace", fontSize: 13, fontWeight: 900, letterSpacing: 1 }}>
+                                        {p.mappingCode}
+                                      </span>
+                                      <button
+                                        style={{ ...styles.btnSecondary, padding: "4px 10px", fontSize: 11, borderRadius: 8 }}
+                                        onClick={() => navigator.clipboard?.writeText(p.mappingCode)}
+                                      >
+                                        Copy
+                                      </button>
+                                    </div>
+                                    <div style={{ marginTop: 6, fontFamily: "monospace", fontSize: 11, color: textSoft, background: "rgba(23,32,51,0.04)", padding: "4px 8px", borderRadius: 6, display: "inline-block" }}>
+                                      TZ | {p.mappingCode} | TEST | COLD
+                                    </div>
+                                  </div>
+                                ) : null}
                                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
                                   <span style={{ ...styles.badge, background: "rgba(29,95,208,0.08)", color: accent, border: "1px solid rgba(29,95,208,0.12)" }}>
                                     {formatStatusLabel(p.lifecycleStatus || "test")}

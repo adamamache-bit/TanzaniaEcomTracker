@@ -627,6 +627,7 @@ export function sanitizeSituationData(value) {
 export function getEmptyExpeditionForm() {
   return {
     name: "",
+    mappingCode: "",
     source: "china",
     sellingPrice: 0,
     purchaseUnitPrice: 0,
