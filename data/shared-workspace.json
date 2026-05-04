@@ -1,0 +1,69 @@
+{
+  "version": 4,
+  "updatedAt": "2026-04-20T13:54:57.499Z",
+  "state": {
+    "products": [],
+    "tracking": [],
+    "customers": [],
+    "serviceForm": {
+      "totalLeads": 150,
+      "confirmationRate": 50,
+      "deliveryRate": 50,
+      "sellingPriceTzs": 39000,
+      "productCostTzs": 15000,
+      "cplUsd": 6.333333333333333
+    },
+    "situationData": {
+      "salaries": [],
+      "fixedCharges": [],
+      "adInputs": {},
+      "hourlyAdsSnapshots": [
+        {
+          "id": "daily-ads-1776693297458",
+          "bucket": "2026-04-20",
+          "totalSpendTzs": 0,
+          "capturedAt": "2026-04-20T13:54:57.458Z",
+          "source": "tracking"
+        },
+        {
+          "id": "daily-ads-1776532574950",
+          "bucket": "2026-04-18",
+          "totalSpendTzs": 0,
+          "capturedAt": "2026-04-18T17:16:14.950Z",
+          "source": "tracking"
+        }
+      ],
+      "cumulativeAdsTotalTzs": 0,
+      "cumulativeAdsByProduct": {},
+      "lastObservedAdsSpendTzs": 0,
+      "lastObservedAdsByProduct": {},
+      "lastAdsAccumulatedAt": "2026-04-20T13:54:57.458Z",
+      "weeklyAdReviews": [],
+      "weeklyReviewDraft": {
+        "productId": "",
+        "launchedAds": "yes",
+        "averageCplTzs": "",
+        "notes": ""
+      }
+    },
+    "metaAdsState": {
+      "accessToken": "",
+      "accountId": "",
+      "dateStart": "2026-04-10",
+      "dateEnd": "2026-04-16",
+      "campaignMappings": {},
+      "autoSync": true,
+      "autoSyncIntervalMinutes": 3,
+      "lastSyncAt": null,
+      "lifetimeSpendTzs": 0,
+      "lastLifetimeSpendSyncDate": null,
+      "lifetimeSpendCapturedAt": null,
+      "dailySpendSnapshots": [],
+      "lastSyncSummary": null
+    },
+    "importMeta": {
+      "lastOrdersImportAt": null,
+      "lastShippingImportAt": null
+    }
+  }
+}
