@@ -169,6 +169,12 @@ async function syncAuditTrail(customers, workspaceId) {
   }
 }
 
+export async function clearNormalizedProducts(workspaceId = supabaseWorkspaceId) {
+  if (!supabaseEnabled || !supabase) return;
+  const { error } = await supabase.from("products").delete().eq("workspace_id", workspaceId);
+  if (error) throw error;
+}
+
 // Fire-and-forget: sync all normalized tables in parallel. Errors are silently swallowed.
 export async function syncNormalizedTables(snapshot = {}, workspaceId = supabaseWorkspaceId) {
   if (!supabaseEnabled || !supabase) return;

@@ -130,7 +130,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
-import { checkNormalizedTablesEmpty, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, syncNormalizedTables } from "./lib/supabaseSync";
+import { checkNormalizedTablesEmpty, clearNormalizedProducts, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -4109,7 +4109,7 @@ export default function App() {
     }
   };
 
-  const handleClearAllProducts = () => {
+  const handleClearAllProducts = async () => {
     const nextSnapshot = {
       ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
       products: [],
@@ -4119,6 +4119,14 @@ export default function App() {
     setExpeditionForm(getEmptyExpeditionForm());
     setClearProductsConfirm(false);
     latestSharedStateRef.current = nextSnapshot;
+    // Clear normalized Supabase table so the fallback loader doesn't restore deleted products
+    try { await clearNormalizedProducts(supabaseWorkspaceId); } catch { /* ignore */ }
+    // Clear localStorage backups so browser backup doesn't restore them either
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(AUTO_BACKUP_KEY);
+      localStorage.removeItem(AUTO_BACKUP_META_KEY);
+    } catch { /* ignore */ }
     void persistSharedSnapshot(nextSnapshot, {
       progressNotice: "Clearing products...",
       successNotice: "All products deleted",
@@ -7645,7 +7653,7 @@ export default function App() {
                 <KpiCard icon={<TrendingUp size={18} />} title="Top score" value={`${productsCatalogSummary.topScore}/100`} sub={bestProduct ? bestProduct.name : "No highlighted product"} valueColor={green} />
               </div>
 
-              <div style={{ ...styles.card, padding: 22, display: ordersTab === "import" ? "block" : "none" }}>
+              <div style={{ ...styles.card, padding: 22 }}>
                 <div style={styles.sectionHeader}>
                   <div>
                     <div style={styles.sectionEyebrow}>Catalog intelligence</div>
