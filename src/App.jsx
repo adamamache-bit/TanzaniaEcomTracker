@@ -898,6 +898,8 @@ export default function App() {
   const [profitTab, setProfitTab] = useState("overview");
   const [ownerInjectionTzs, setOwnerInjectionTzs] = useState(0);
   const [simProductName, setSimProductName] = useState("");
+  const [migrateNotice, setMigrateNotice] = useState("");
+  const [migrating, setMigrating] = useState(false);
   const [settingsAuditTab, setSettingsAuditTab] = useState("workspace");
   const [showCloudBackups, setShowCloudBackups] = useState(false);
   const [_aiBriefExpanded, _setAiBriefExpanded] = useState(false);
@@ -1166,6 +1168,37 @@ export default function App() {
       }, 0);
     }
   }, [readBrowserBackupSnapshot]);
+
+  const handleMigrateLocalToCloud = useCallback(async () => {
+    if (!cloudAuth.user) {
+      setMigrateNotice("Sign in to your cloud account first.");
+      return;
+    }
+    const localSnapshot = readLocalWorkspaceSnapshotFromStorage();
+    if (!localSnapshot || !hasMeaningfulWorkspaceData(localSnapshot)) {
+      setMigrateNotice("No local data found to migrate.");
+      return;
+    }
+    setMigrating(true);
+    setMigrateNotice("Migrating data to cloud...");
+    try {
+      await saveCloudWorkspace(localSnapshot, {
+        workspaceId: supabaseWorkspaceId,
+        userId: cloudAuth.user.id,
+        backupReason: "localStorage-migration",
+      });
+      const pCount = localSnapshot.products?.length || 0;
+      const oCount = localSnapshot.customers?.length || 0;
+      const tCount = localSnapshot.tracking?.length || 0;
+      setMigrateNotice(`Migration complete — ${pCount} products, ${oCount} orders, ${tCount} tracking rows pushed to cloud.`);
+      lastSharedPayloadRef.current = "";
+      applySharedStateSnapshot(localSnapshot);
+    } catch (error) {
+      setMigrateNotice(`Migration failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setMigrating(false);
+    }
+  }, [cloudAuth.user, applySharedStateSnapshot]);
 
   useEffect(() => {
     if (supabaseEnabled) return;
@@ -10411,6 +10444,26 @@ export default function App() {
                       {showCloudBackups ? "Hide restore points" : "Show restore points"}
                     </button>
                   </div>
+                  {supabaseEnabled && (
+                    <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${cardBorder}` }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: amber, marginBottom: 8 }}>One-time migration</div>
+                      <div style={{ color: textSoft, fontSize: 13, marginBottom: 12, lineHeight: 1.5 }}>
+                        Push your local browser data to the cloud workspace. Run once when migrating to a new device or first cloud setup.
+                      </div>
+                      <button
+                        style={{ ...styles.btnPrimary, opacity: migrating ? 0.6 : 1 }}
+                        onClick={() => void handleMigrateLocalToCloud()}
+                        disabled={migrating}
+                      >
+                        {migrating ? "Migrating..." : "Migrate localStorage → Supabase"}
+                      </button>
+                      {migrateNotice ? (
+                        <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 12, background: migrateNotice.startsWith("Migration complete") ? "rgba(21,143,99,0.08)" : "rgba(217,72,95,0.08)", color: migrateNotice.startsWith("Migration complete") ? green : red, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+                          {migrateNotice}
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
                 <div style={{ ...styles.card, padding: 18 }}>
                   <div style={styles.sectionEyebrow}>Exports & restore</div>
