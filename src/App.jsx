@@ -21,6 +21,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  XCircle,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -1000,6 +1001,8 @@ export default function App() {
   });
   const [ordersImportNotice, setOrdersImportNotice] = useState("");
   const [ordersImportDetails, setOrdersImportDetails] = useState(null);
+  const [ordersImportHistory, setOrdersImportHistory] = useState([]);
+  const [selectedLeadId, setSelectedLeadId] = useState("");
   const [shippingImportNotice, setShippingImportNotice] = useState("");
   const [shippingImportDetails, setShippingImportDetails] = useState(null);
   const [importMeta, setImportMeta] = useState(() => {
@@ -1086,6 +1089,8 @@ export default function App() {
   const [customerListFilters, setCustomerListFilters] = useState({
     search: "",
     status: "all",
+    productId: "all",
+    city: "all",
     pageSize: 25,
   });
   const [customerListPage, setCustomerListPage] = useState(1);
@@ -3142,7 +3147,7 @@ export default function App() {
     [selectedCustomerProduct, customerForm.quantity]
   );
 
-  const customerFormOrderValue = useMemo(
+  const _customerFormOrderValue = useMemo(
     () => Number(customerFormPricing.totalPrice || 0),
     [customerFormPricing]
   );
@@ -4400,7 +4405,7 @@ export default function App() {
         setOrdersImportNotice(
           `Excel imported: ${createdCount} new, ${updatedCount} updated, ${skippedCount} skipped${unmatchedCount ? `, ${unmatchedCount} unmatched product(s) imported anyway` : ""}.`
         );
-        setOrdersImportDetails({
+        const importRecord = {
           detectedHeaders,
           reasonCounts: {
             missingName: 0,
@@ -4414,7 +4419,11 @@ export default function App() {
             statusChangesDetected: report.statusChangesDetected,
           },
           unmatchedProducts: Array.from(unmatchedProducts).slice(0, 10),
-        });
+          importedAt: new Date().toISOString(),
+          summary: `${createdCount} new, ${updatedCount} updated, ${skippedCount} skipped`,
+        };
+        setOrdersImportDetails(importRecord);
+        setOrdersImportHistory((prev) => [importRecord, ...prev].slice(0, 20));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Excel import failed";
         setOrdersImportNotice(`Excel import failed: ${message}`);
@@ -4884,6 +4893,50 @@ export default function App() {
     };
   }, [products, serviceLeadCustomers]);
 
+  const confirmationMetrics = useMemo(() => {
+    const total = serviceLeadCustomers.length;
+    const confirmed = serviceLeadCustomers.filter((c) => isConfirmationConfirmed(getCustomerConfirmationStatus(c))).length;
+    const noReply = serviceLeadCustomers.filter((c) => isNoReplyStatus(getCustomerConfirmationStatus(c))).length;
+    const cancelled = serviceLeadCustomers.filter((c) => isConfirmationCancelled(getCustomerConfirmationStatus(c))).length;
+    const invalid = serviceLeadCustomers.filter((c) => isInvalidLeadStatus(getCustomerConfirmationStatus(c))).length;
+    const stockHold = serviceLeadCustomers.filter((c) => isStockHoldStatus(getCustomerConfirmationStatus(c))).length;
+    const unknown = Math.max(0, total - confirmed - noReply - cancelled - invalid - stockHold);
+    const confirmationRate = total > 0 ? (confirmed / total) * 100 : 0;
+    const productMap = {};
+    for (const c of serviceLeadCustomers) {
+      const pid = c.productId || "__none__";
+      if (!productMap[pid]) productMap[pid] = { confirmed: 0, noReply: 0, cancelled: 0, total: 0 };
+      productMap[pid].total++;
+      const s = getCustomerConfirmationStatus(c);
+      if (isConfirmationConfirmed(s)) productMap[pid].confirmed++;
+      else if (isNoReplyStatus(s)) productMap[pid].noReply++;
+      else if (isConfirmationCancelled(s)) productMap[pid].cancelled++;
+    }
+    const productRows = Object.entries(productMap).map(([pid, data]) => ({
+      productId: pid,
+      productName: pid === "__none__" ? "Unknown" : (products.find((p) => p.id === pid)?.name || pid),
+      ...data,
+      confirmationRate: data.total > 0 ? (data.confirmed / data.total) * 100 : 0,
+    })).sort((a, b) => b.total - a.total);
+    const cityMap = {};
+    for (const c of serviceLeadCustomers) {
+      const city = String(c.city || "").trim() || "Unknown";
+      if (!cityMap[city]) cityMap[city] = { confirmed: 0, total: 0 };
+      cityMap[city].total++;
+      if (isConfirmationConfirmed(getCustomerConfirmationStatus(c))) cityMap[city].confirmed++;
+    }
+    const cityRows = Object.entries(cityMap).map(([city, data]) => ({
+      city, ...data,
+      confirmationRate: data.total > 0 ? (data.confirmed / data.total) * 100 : 0,
+    })).sort((a, b) => b.total - a.total).slice(0, 25);
+    return { total, confirmed, noReply, cancelled, invalid, stockHold, unknown, confirmationRate, productRows, cityRows };
+  }, [serviceLeadCustomers, products]);
+
+  const ordersPageCityList = useMemo(
+    () => [...new Set(operationalCustomers.map((c) => String(c.city || "").trim()).filter(Boolean))].sort(),
+    [operationalCustomers]
+  );
+
   const liveAutomationSummary = useMemo(() => {
     const totalAdSpendTzs = tracking.reduce((sum, row) => sum + Number(row.adSpend || 0), 0);
     const deliveredUnits = productDashboard.reduce((sum, product) => sum + Number(product.deliveredUnits || 0), 0);
@@ -5011,6 +5064,8 @@ export default function App() {
       })
       .filter((customer) => {
         if (customerListFilters.status !== "all" && customer.status !== customerListFilters.status) return false;
+        if (customerListFilters.productId !== "all" && customer.productId !== customerListFilters.productId) return false;
+        if (customerListFilters.city !== "all" && normalizeHeaderName(customer.city) !== normalizeHeaderName(customerListFilters.city)) return false;
         if (!searchValue) return true;
 
         const haystack = normalizeHeaderName(
@@ -5035,7 +5090,7 @@ export default function App() {
         if (dateB !== dateA) return dateB - dateA;
         return String(b.id).localeCompare(String(a.id));
       });
-  }, [confirmationStatusMap, customerListFilters.status, deferredCustomerSearch, operationalCustomers, products]);
+  }, [confirmationStatusMap, customerListFilters.status, customerListFilters.productId, customerListFilters.city, deferredCustomerSearch, operationalCustomers, products]);
 
   const customerListPageCount = Math.max(1, Math.ceil(compactCustomerRows.length / Number(customerListFilters.pageSize || 25)));
   const selectedCustomerIdSet = useMemo(() => new Set(selectedCustomerIds), [selectedCustomerIds]);
@@ -5045,6 +5100,11 @@ export default function App() {
   const historyTargetCustomer = useMemo(
     () => operationalCustomers.find((customer) => customer.id === customerHistoryTargetId) || null,
     [customerHistoryTargetId, operationalCustomers]
+  );
+
+  const selectedLead = useMemo(
+    () => operationalCustomers.find((c) => c.id === selectedLeadId) || null,
+    [selectedLeadId, operationalCustomers]
   );
 
   const paginatedCustomerRows = useMemo(() => {
@@ -8165,112 +8225,111 @@ export default function App() {
             <div style={{ display: "grid", gap: 20 }}>
               <PageHeader
                 eyebrow="Orders"
-                title="Leads and confirmation workflow"
-                description="Import orders, assign owners and manage confirmation without mixing shipping or finance tools."
-                action={<button style={styles.btnPrimary} onClick={() => ordersImportInputRef.current?.click()}>Import Excel Orders</button>}
+                title="Lead pipeline and confirmation"
+                description="Import leads, track confirmation status and analyse performance. Shipping and finance are handled in their own menus."
+                action={<button style={styles.btnPrimary} onClick={() => ordersImportInputRef.current?.click()}>Import Excel</button>}
               />
               <InlineTabs
                 items={[
-                  { value: "import", label: "Import Orders" },
-                  { value: "add-order", label: "Add Order" },
-                  { value: "pipeline", label: "Order Pipeline" },
+                  { value: "import", label: "Import Leads" },
+                  { value: "pipeline", label: "Lead Pipeline" },
+                  { value: "lead-details", label: "Lead Details" },
                   { value: "analytics", label: "Confirmation Analytics" },
+                  { value: "audit", label: "Import History" },
                 ]}
                 value={ordersTab}
                 onChange={setOrdersTab}
               />
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
-                <KpiCard icon={<Users size={18} />} title="Total Orders" value={customersDashboard.totalOrders} sub="All customer orders" />
-                <KpiCard icon={<ShoppingBag size={18} />} title="Confirmed" value={customersDashboard.confirmedOrders} sub="Active pipeline + delivered" />
-                <KpiCard icon={<Rocket size={18} />} title="Delivered" value={customersDashboard.deliveredOrders} sub="Successfully delivered" />
-                <KpiCard icon={<Wallet size={18} />} title="Revenue" value={formatTZS(customersDashboard.totalRevenue)} sub="Orders revenue estimate" valueColor={green} />
+                <KpiCard icon={<Users size={18} />} title="Total Leads" value={confirmationMetrics.total} sub="All leads imported" />
+                <KpiCard icon={<ShoppingBag size={18} />} title="Confirmed" value={confirmationMetrics.confirmed} sub={`${confirmationMetrics.confirmationRate.toFixed(1)}% confirmation rate`} valueColor={green} />
+                <KpiCard icon={<Phone size={18} />} title="No Reply" value={confirmationMetrics.noReply} sub="Unreached leads" valueColor={amber} />
+                <KpiCard icon={<XCircle size={18} />} title="Cancelled" value={confirmationMetrics.cancelled} sub="Cancelled or rejected" valueColor={red} />
               </div>
 
-              <div style={{ ...styles.card, padding: 22, display: ordersTab === "import" ? "block" : "none" }}>
-                <div style={styles.sectionHeader}>
-                  <div>
-                    <div style={styles.sectionEyebrow}>Orders import</div>
-                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Import Excel Orders</div>
-                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>
-                      Importez ici toutes les commandes clients avec leur statut de confirmation. Les commandes confirmees passent automatiquement dans le menu Shipping.
-                    </div>
-                  </div>
-                  <button style={styles.btnPrimary} onClick={() => ordersImportInputRef.current?.click()}>
-                    Import Excel Orders
-                  </button>
-                </div>
-
-                {ordersImportNotice ? (
-                  <div style={{ ...styles.softStat, marginTop: 16 }}>
-                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: textSoft }}>Excel import</div>
-                    <div style={{ marginTop: 8, color: textMain, fontWeight: 700 }}>{ordersImportNotice}</div>
-                    <div style={{ marginTop: 6, color: textSoft, fontSize: 13, lineHeight: 1.5 }}>
-                      Supported columns include customer name, phone, product/product id, quantity, total price, order date, status, payment method, city, address, notes and external order id.
-                    </div>
-                    {ordersImportDetails ? (
-                      <div style={{ marginTop: 12, display: "grid", gap: 8, color: textSoft, fontSize: 13, lineHeight: 1.5 }}>
-                        <div>
-                          Detected headers: {ordersImportDetails.detectedHeaders.length ? ordersImportDetails.detectedHeaders.join(" | ") : "N/A"}
-                        </div>
-                        <div>
-                          Skip reasons: missing name {ordersImportDetails.reasonCounts.missingName}, missing phone {ordersImportDetails.reasonCounts.missingPhone}, missing product {ordersImportDetails.reasonCounts.missingProduct}
-                          {ordersImportDetails.reasonCounts.unknownProduct > 0 ? ` | imported with unmatched product: ${ordersImportDetails.reasonCounts.unknownProduct}` : ""}
-                        </div>
-                        {ordersImportDetails.unmatchedProducts.length ? (
-                          <div>
-                            Unmatched products (imported anyway): {ordersImportDetails.unmatchedProducts.join(" | ")}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-
-              <div style={{ display: ordersTab === "add-order" ? "grid" : "none", gridTemplateColumns: responsiveColumns("minmax(0, 1.15fr) minmax(300px, 0.85fr)", "1fr", "1fr"), gap: 16 }}>
+              {/* Import Leads tab */}
+              <div style={{ display: ordersTab === "import" ? "grid" : "none", gap: 16 }}>
                 <div style={{ ...styles.card, padding: 22 }}>
                   <div style={styles.sectionHeader}>
                     <div>
-                      <div style={styles.sectionEyebrow}>Lead intake</div>
-                      <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Nouveau client / commande</div>
-                      <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Entre les informations du client, le produit commandé et les détails de traitement dans une seule fiche opérateur.</div>
+                      <div style={styles.sectionEyebrow}>Import leads</div>
+                      <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Import Excel Leads</div>
+                      <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>
+                        Import your leads Excel file. Each row becomes a lead with confirmation status. Required columns: <strong>Code</strong>, <strong>Phone</strong>, <strong>Product Name</strong>. Optional: Customer, City, Address, Amount, Quantity, Conf Status, Shipping Status, Date.
+                      </div>
                     </div>
-                    <button style={styles.btnPrimary} onClick={saveCustomerOrder}>Save Order</button>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <button style={styles.btnSecondary} onClick={() => { setOrdersTab("pipeline"); }}>
+                        View Pipeline
+                      </button>
+                      <button style={styles.btnPrimary} onClick={() => ordersImportInputRef.current?.click()}>
+                        Import Excel
+                      </button>
+                    </div>
                   </div>
+                  {ordersImportNotice ? (
+                    <div style={{ ...styles.softStat, marginTop: 16 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: textSoft }}>Last import result</div>
+                      <div style={{ marginTop: 8, color: textMain, fontWeight: 700 }}>{ordersImportNotice}</div>
+                      {ordersImportDetails ? (
+                        <div style={{ marginTop: 12, display: "grid", gap: 6, color: textSoft, fontSize: 13, lineHeight: 1.5 }}>
+                          <div>Detected headers: {ordersImportDetails.detectedHeaders?.length ? ordersImportDetails.detectedHeaders.join(" · ") : "N/A"}</div>
+                          <div>
+                            Issues: missing code {ordersImportDetails.reasonCounts?.missingCode || 0} · missing phone {ordersImportDetails.reasonCounts?.missingPhone || 0} · missing product {ordersImportDetails.reasonCounts?.missingProduct || 0} · unmatched product {ordersImportDetails.reasonCounts?.unknownProduct || 0} (imported anyway)
+                          </div>
+                          <div>
+                            Status: {ordersImportDetails.reasonCounts?.statusChangesDetected || 0} status changes · unknown conf {ordersImportDetails.reasonCounts?.unknownConfirmationStatuses || 0} · unknown shipping {ordersImportDetails.reasonCounts?.unknownShippingStatuses || 0}
+                          </div>
+                          {ordersImportDetails.unmatchedProducts?.length ? (
+                            <div>Unmatched products (still imported): {ordersImportDetails.unmatchedProducts.join(" · ")}</div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(2, minmax(0, 1fr))", "1fr", "1fr"), gap: 16 }}>
+                <div style={{ ...styles.card, padding: 22 }}>
+                  <div style={styles.sectionHeader}>
+                    <div>
+                      <div style={styles.sectionEyebrow}>Add lead manually</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>New lead form</div>
+                    </div>
+                    <button style={styles.btnPrimary} onClick={saveCustomerOrder}>Save Lead</button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 14 }}>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Nom du client</label>
+                      <label style={styles.fieldLabel}>Customer name</label>
                       <input style={styles.input} value={customerForm.customerName} onChange={(e) => setCustomerForm({ ...customerForm, customerName: e.target.value })} placeholder="Ex: Amina Yusuf" />
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Telephone</label>
+                      <label style={styles.fieldLabel}>Phone</label>
                       <input style={styles.input} value={customerForm.phone} onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })} placeholder="Ex: +255712345678" />
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Ville</label>
+                      <label style={styles.fieldLabel}>City</label>
                       <input style={styles.input} value={customerForm.city} onChange={(e) => setCustomerForm({ ...customerForm, city: e.target.value })} placeholder="Ex: Dar es Salaam" />
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Adresse</label>
+                      <label style={styles.fieldLabel}>Address</label>
                       <input style={styles.input} value={customerForm.address} onChange={(e) => setCustomerForm({ ...customerForm, address: e.target.value })} placeholder="Ex: Mikocheni, Block A" />
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Produit commande</label>
+                      <label style={styles.fieldLabel}>Product</label>
                       <select style={styles.input} value={customerForm.productId} onChange={(e) => setCustomerForm({ ...customerForm, productId: e.target.value })}>
                         {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                       </select>
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Quantite</label>
+                      <label style={styles.fieldLabel}>Quantity</label>
                       <input style={styles.input} type="number" min="1" value={customerForm.quantity} onChange={(e) => setCustomerForm({ ...customerForm, quantity: e.target.value })} />
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Date de commande</label>
+                      <label style={styles.fieldLabel}>Order date</label>
                       <input style={styles.input} type="date" value={customerForm.orderDate} onChange={(e) => setCustomerForm({ ...customerForm, orderDate: e.target.value })} />
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Methode de paiement</label>
+                      <label style={styles.fieldLabel}>Payment method</label>
                       <select style={styles.input} value={customerForm.paymentMethod} onChange={(e) => setCustomerForm({ ...customerForm, paymentMethod: e.target.value })}>
                         <option value="COD">COD</option>
                         <option value="Card">Card</option>
@@ -8279,21 +8338,15 @@ export default function App() {
                       </select>
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Statut</label>
-                      <select
-                        style={styles.input}
-                        value={normalizeOrderStatus(customerForm.status)}
-                        onChange={(e) => setCustomerForm({ ...customerForm, status: e.target.value })}
-                      >
+                      <label style={styles.fieldLabel}>Confirmation status</label>
+                      <select style={styles.input} value={normalizeOrderStatus(customerForm.status)} onChange={(e) => setCustomerForm({ ...customerForm, status: e.target.value })}>
                         {confirmationStatusCatalog.map((status) => (
-                          <option key={status.value} value={status.value}>
-                            {status.label}
-                          </option>
+                          <option key={status.value} value={status.value}>{status.label}</option>
                         ))}
                       </select>
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Source Lead</label>
+                      <label style={styles.fieldLabel}>Lead source</label>
                       <select style={styles.input} value={customerForm.leadSource} onChange={(e) => setCustomerForm({ ...customerForm, leadSource: e.target.value })}>
                         <option value="manual">Manual</option>
                         <option value="meta">Meta Ads</option>
@@ -8305,121 +8358,40 @@ export default function App() {
                       </select>
                     </div>
                     <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Campaign</label>
-                      <input style={styles.input} value={customerForm.campaignName} onChange={(e) => setCustomerForm({ ...customerForm, campaignName: e.target.value })} placeholder="Campaign name" />
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Ad Set</label>
-                      <input style={styles.input} value={customerForm.adsetName} onChange={(e) => setCustomerForm({ ...customerForm, adsetName: e.target.value })} placeholder="Ad set name" />
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Creative</label>
-                      <input style={styles.input} value={customerForm.creativeName} onChange={(e) => setCustomerForm({ ...customerForm, creativeName: e.target.value })} placeholder="Creative or hook" />
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Priority</label>
-                      <select style={styles.input} value={customerForm.priority} onChange={(e) => setCustomerForm({ ...customerForm, priority: e.target.value })}>
-                        <option value="low">Low</option>
-                        <option value="normal">Normal</option>
-                        <option value="high">High</option>
-                        <option value="urgent">Urgent</option>
-                      </select>
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Customer Type</label>
-                      <select style={styles.input} value={customerForm.customerType} onChange={(e) => setCustomerForm({ ...customerForm, customerType: e.target.value })}>
-                        <option value="new">New</option>
-                        <option value="repeat">Repeat</option>
-                        <option value="vip">VIP</option>
-                      </select>
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Call Attempts</label>
-                      <input style={styles.input} type="number" min="0" value={customerForm.callAttempts} onChange={(e) => setCustomerForm({ ...customerForm, callAttempts: e.target.value })} />
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Cancel Reason</label>
-                      <input style={styles.input} value={customerForm.cancelReason} onChange={(e) => setCustomerForm({ ...customerForm, cancelReason: e.target.value })} placeholder="Changed mind, too expensive..." />
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Unreached Reason</label>
-                      <input style={styles.input} value={customerForm.unreachedReason} onChange={(e) => setCustomerForm({ ...customerForm, unreachedReason: e.target.value })} placeholder="No answer, switched off..." />
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Carrier / Agency</label>
-                      <input style={styles.input} value={customerForm.carrierName} onChange={(e) => setCustomerForm({ ...customerForm, carrierName: e.target.value })} placeholder="Carrier or agency" />
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Tracking Number</label>
-                      <input style={styles.input} value={customerForm.trackingNumber} onChange={(e) => setCustomerForm({ ...customerForm, trackingNumber: e.target.value })} placeholder="Waybill / reference" />
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Expected Delivery</label>
-                      <input style={styles.input} type="date" value={customerForm.expectedDeliveryDate} onChange={(e) => setCustomerForm({ ...customerForm, expectedDeliveryDate: e.target.value })} />
-                    </div>
-                    <div style={styles.fieldBlock}>
-                      <label style={styles.fieldLabel}>Return Reason</label>
-                      <input style={styles.input} value={customerForm.returnReason} onChange={(e) => setCustomerForm({ ...customerForm, returnReason: e.target.value })} placeholder="Rejected, return stock..." />
-                    </div>
-                    <div style={styles.fieldBlock}>
                       <label style={styles.fieldLabel}>Notes</label>
                       <input style={styles.input} value={customerForm.notes} onChange={(e) => setCustomerForm({ ...customerForm, notes: e.target.value })} placeholder="Ex: Call in the afternoon" />
                     </div>
                   </div>
                 </div>
-
-                <div style={styles.heroAside}>
-                  <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: 0.55, textTransform: "uppercase", color: "rgba(255,255,255,0.72)" }}>Order preview</div>
-                  <div style={{ marginTop: 10, fontSize: 24, fontWeight: 900, lineHeight: 1.08 }}>{selectedCustomerProduct?.name || "Select a product"}</div>
-                  <div style={{ marginTop: 10, color: "rgba(255,255,255,0.78)", lineHeight: 1.55 }}>Visual check before saving the order, so the operator can validate value, status and payment flow at a glance.</div>
-                  <div style={{ display: "grid", gap: 12, marginTop: 18 }}>
-                    <MiniStat
-                      label="Order value"
-                      value={formatTZS(customerFormOrderValue)}
-                      tone="green"
-                      dark
-                      sub={
-                        customerFormPricing.matchedOffer
-                          ? `${Math.max(1, Number(customerForm.quantity || 1))} item(s) | offer ${customerFormPricing.matchedOffer.minQty}+ pcs applied`
-                          : `${Math.max(1, Number(customerForm.quantity || 1))} item(s) | base price`
-                      }
-                    />
-                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr", "1fr 1fr", "1fr"), gap: 12 }}>
-                      <MiniStat label="Payment" value={customerForm.paymentMethod || "COD"} dark />
-                      <MiniStat label="Status" value={formatStatusLabel(customerForm.status || "new-order")} tone="amber" dark />
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr", "1fr 1fr", "1fr"), gap: 12 }}>
-                      <MiniStat label="Source lead" value={formatStatusLabel(customerForm.leadSource || "manual")} tone="blue" dark sub={customerForm.campaignName || "No campaign"} />
-                      <MiniStat label="Priority" value={formatStatusLabel(customerForm.priority || "normal")} tone="amber" dark sub={`${formatStatusLabel(customerForm.customerType || "new")} customer`} />
-                    </div>
-                    <MiniStat label="Destination" value={customerForm.city || "City not set"} tone="blue" dark sub={customerForm.address || "Address not set"} />
-                  </div>
-                </div>
               </div>
 
-              <div style={{ ...styles.card, padding: 22, display: ordersTab === "pipeline" ? "block" : "none" }}>
+              {/* Lead Pipeline tab */}
+              <div style={{ display: ordersTab === "pipeline" ? "grid" : "none", gap: 16 }}>
+              <div style={{ ...styles.card, padding: 22 }}>
                 <div style={styles.sectionHeader}>
                   <div>
-                    <div style={styles.sectionEyebrow}>Order pipeline</div>
-                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Liste des commandes clients</div>
-                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Toutes les commandes saisies apparaissent ici avec leur produit, client, valeur et statut de traitement.</div>
+                    <div style={styles.sectionEyebrow}>Lead pipeline</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>All leads</div>
+                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>All imported and manually added leads with confirmation status. Click View to open a lead detail.</div>
                   </div>
+                  <button style={styles.btnPrimary} onClick={() => setOrdersTab("import")}>
+                    Add Lead
+                  </button>
                 </div>
 
                 <div style={{ display: "grid", gap: 16 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 12 }}>
-                    <MiniStat label="Filtered value" value={formatTZS(filteredCustomerSummary.totalValue)} tone="blue" sub="Current order selection" />
-                    <MiniStat label="Confirmed" value={filteredCustomerSummary.confirmed} tone="green" sub="Active revenue pipeline" />
-                    <MiniStat label="Pending" value={filteredCustomerSummary.pending} tone="amber" sub="Still in confirmation flow" />
-                    <MiniStat label="Cancelled" value={filteredCustomerSummary.cancelled} tone="amber" sub="Lost or rejected orders" />
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 12 }}>
+                    <MiniStat label="Filtered leads" value={compactCustomerRows.length} tone="blue" sub="Matching current filters" />
+                    <MiniStat label="Confirmed" value={filteredCustomerSummary.confirmed} tone="green" sub="Active confirmation" />
+                    <MiniStat label="Pending / Cancelled" value={filteredCustomerSummary.pending + filteredCustomerSummary.cancelled} tone="amber" sub="In flow or lost" />
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("minmax(260px, 1fr) 180px 120px", "1fr 1fr", "1fr"), gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("minmax(200px, 1fr) 160px 160px 140px 110px", "1fr 1fr", "1fr"), gap: 12 }}>
                     <input
                       style={styles.input}
                       value={customerListFilters.search}
                       onChange={(e) => setCustomerListFilters((prev) => ({ ...prev, search: e.target.value }))}
-                      placeholder="Search name, phone, city, product, order id..."
+                      placeholder="Search name, phone, city, product, id..."
                     />
                     <select
                       style={styles.input}
@@ -8431,6 +8403,26 @@ export default function App() {
                         <option key={status.value} value={status.value}>
                           {status.label} ({status.count})
                         </option>
+                      ))}
+                    </select>
+                    <select
+                      style={styles.input}
+                      value={customerListFilters.productId}
+                      onChange={(e) => setCustomerListFilters((prev) => ({ ...prev, productId: e.target.value }))}
+                    >
+                      <option value="all">All products</option>
+                      {products.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                    <select
+                      style={styles.input}
+                      value={customerListFilters.city}
+                      onChange={(e) => setCustomerListFilters((prev) => ({ ...prev, city: e.target.value }))}
+                    >
+                      <option value="all">All cities</option>
+                      {ordersPageCityList.map((city) => (
+                        <option key={city} value={city}>{city}</option>
                       ))}
                     </select>
                     <select
@@ -8548,7 +8540,7 @@ export default function App() {
                     <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
                       <thead>
                         <tr>
-                          {["Select", "Customer", "Product", "Order", "Owner", "Value", "Status", "History", "Actions"].map((head) => (
+                          {["Select", "Customer", "Product", "Order", "Owner", "Amount", "Status", "Details", "Actions"].map((head) => (
                             <th
                               key={head}
                               style={{
@@ -8683,7 +8675,7 @@ export default function App() {
                                 </div>
                               </td>
                               <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, minWidth: 110 }}>
-                                <button style={styles.btnSecondary} onClick={() => setCustomerHistoryTargetId(customer.id)}>
+                                <button style={styles.btnSecondary} onClick={() => { setSelectedLeadId(customer.id); setOrdersTab("lead-details"); }}>
                                   View
                                 </button>
                               </td>
@@ -8693,7 +8685,7 @@ export default function App() {
                                     style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca", padding: "8px 10px", fontSize: 12 }}
                                     onClick={() => deleteCustomerOrder(customer.id)}
                                   >
-                                    Delete Order
+                                    Delete
                                   </button>
                                 </div>
                               </td>
@@ -8704,49 +8696,104 @@ export default function App() {
                     </table>
 
                     {compactCustomerRows.length === 0 ? (
-                      <div style={{ padding: 24, color: textSoft }}>No customer orders match the current filters.</div>
+                      <div style={{ padding: 24, color: textSoft }}>No leads match the current filters.</div>
                     ) : null}
                   </div>
                 </div>
+              </div>
+              </div>
 
-                <div style={{ ...styles.card, padding: 22, display: ordersTab === "analytics" ? "block" : "none" }}>
+              {/* Lead Details tab */}
+              <div style={{ display: ordersTab === "lead-details" ? "grid" : "none", gap: 16 }}>
+                {selectedLead ? (
+                  <div style={{ ...styles.card, padding: 22 }}>
+                    <div style={styles.sectionHeader}>
+                      <div>
+                        <div style={styles.sectionEyebrow}>Lead detail</div>
+                        <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>{selectedLead.customerName || "Unnamed lead"}</div>
+                        <div style={{ color: textSoft, marginTop: 4, fontSize: 13 }}>{selectedLead.id} · {selectedLead.phone} · {selectedLead.city || "No city"}</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        <button style={styles.btnSecondary} onClick={() => { setCustomerHistoryTargetId(selectedLead.id); setOrdersTab("pipeline"); }}>
+                          Order history
+                        </button>
+                        <button style={styles.btnSecondary} onClick={() => setOrdersTab("pipeline")}>
+                          Back to pipeline
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 14, marginTop: 8 }}>
+                      <MiniStat label="Product" value={products.find((p) => p.id === selectedLead.productId)?.name || selectedLead.productId || "—"} tone="blue" sub={`Qty ${selectedLead.quantity || 1}`} />
+                      <MiniStat label="Confirmation status" value={confirmationStatusMap[getCustomerConfirmationStatus(selectedLead)]?.label || getCustomerConfirmationStatus(selectedLead)} tone="green" sub={selectedLead.orderDate || "No date"} />
+                      <MiniStat label="Payment method" value={selectedLead.paymentMethod || "COD"} tone="amber" sub={selectedLead.leadSource || "manual"} />
+                      <MiniStat label="Owner" value={selectedLead.assignedTo || "Unassigned"} sub={selectedLead.priority || "normal"} />
+                      <MiniStat label="Campaign" value={selectedLead.campaignName || "—"} tone="blue" sub={selectedLead.adsetName || selectedLead.creativeName || "No ad detail"} />
+                      <MiniStat label="Source order ID" value={selectedLead.sourceOrderId || "—"} sub={`Customer type: ${selectedLead.customerType || "new"}`} />
+                    </div>
+                    {(selectedLead.notes || selectedLead.cancelReason || selectedLead.unreachedReason || selectedLead.returnReason) ? (
+                      <div style={{ marginTop: 16, padding: 16, borderRadius: 16, background: "rgba(247,243,237,0.85)", border: `1px solid ${cardBorder}` }}>
+                        {selectedLead.notes ? <div style={{ fontSize: 13, color: textMain }}><strong>Notes:</strong> {selectedLead.notes}</div> : null}
+                        {selectedLead.cancelReason ? <div style={{ fontSize: 13, color: textMain, marginTop: 6 }}><strong>Cancel reason:</strong> {selectedLead.cancelReason}</div> : null}
+                        {selectedLead.unreachedReason ? <div style={{ fontSize: 13, color: textMain, marginTop: 6 }}><strong>Unreached reason:</strong> {selectedLead.unreachedReason}</div> : null}
+                        {selectedLead.returnReason ? <div style={{ fontSize: 13, color: textMain, marginTop: 6 }}><strong>Return reason:</strong> {selectedLead.returnReason}</div> : null}
+                      </div>
+                    ) : null}
+                    {selectedLead.history?.length ? (
+                      <div style={{ marginTop: 16, display: "grid", gap: 8 }}>
+                        <div style={{ fontWeight: 800, fontSize: 13, color: textSoft }}>History ({selectedLead.history.length} events)</div>
+                        {selectedLead.history.slice(0, 10).map((entry) => (
+                          <div key={entry.id} style={{ padding: "10px 14px", borderRadius: 12, background: "rgba(255,255,255,0.88)", border: `1px solid ${cardBorder}` }}>
+                            <div style={{ fontWeight: 700, fontSize: 13 }}>{formatStatusLabel(entry.action)}</div>
+                            <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>{entry.at ? new Date(entry.at).toLocaleString() : "No date"} · {entry.source}</div>
+                            {entry.details ? <div style={{ color: textMain, fontSize: 13, marginTop: 6 }}>{entry.details}</div> : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div style={{ ...styles.card, padding: 36, textAlign: "center" }}>
+                    <div style={{ color: textSoft, fontSize: 15 }}>No lead selected. Go to <strong>Lead Pipeline</strong> and click <strong>View</strong> on a lead.</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Confirmation Analytics tab */}
+              <div style={{ display: ordersTab === "analytics" ? "grid" : "none", gap: 16 }}>
+                <div style={{ ...styles.card, padding: 22 }}>
                   <div style={styles.sectionHeader}>
                     <div>
                       <div style={styles.sectionEyebrow}>Confirmation analytics</div>
-                      <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Confirmation performance at a glance</div>
-                      <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>
-                        Review lead volume, confirmation outcome mix and owner workload without opening the full pipeline table.
-                      </div>
+                      <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Confirmation performance</div>
+                      <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Lead volume, confirmation rate, owner workload and city breakdown.</div>
                     </div>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 12, marginBottom: 16 }}>
-                    <MiniStat label="Total leads" value={formatInteger(customersDashboard.totalOrders)} tone="blue" />
-                    <MiniStat label="Confirmed" value={formatInteger(customersDashboard.confirmedOrders)} tone="green" />
-                    <MiniStat label="Pending" value={formatInteger(filteredCustomerSummary.pending)} tone="amber" />
-                    <MiniStat label="Cancelled" value={formatInteger(filteredCustomerSummary.cancelled)} tone="amber" />
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 12, marginBottom: 20 }}>
+                    <MiniStat label="Total leads" value={formatInteger(confirmationMetrics.total)} tone="blue" />
+                    <MiniStat label="Confirmed" value={formatInteger(confirmationMetrics.confirmed)} tone="green" sub={`${confirmationMetrics.confirmationRate.toFixed(1)}% rate`} />
+                    <MiniStat label="No reply" value={formatInteger(confirmationMetrics.noReply)} tone="amber" />
+                    <MiniStat label="Cancelled" value={formatInteger(confirmationMetrics.cancelled)} tone="amber" />
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("minmax(0, 1.1fr) minmax(320px, 0.9fr)", "1fr", "1fr"), gap: 16 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr", "1fr", "1fr"), gap: 16, marginBottom: 16 }}>
                     <div style={{ overflowX: "auto", border: `1px solid ${cardBorder}`, borderRadius: 20 }}>
                       <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
                         <thead>
                           <tr>
                             {["Status", "Count", "Share"].map((head) => (
-                              <th key={head} style={{ textAlign: "left", padding: "14px 12px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247, 243, 237, 0.92)" }}>
-                                {head}
-                              </th>
+                              <th key={head} style={{ textAlign: "left", padding: "12px 12px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247, 243, 237, 0.92)" }}>{head}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody>
                           {confirmationStatusCatalog.map((status, index) => {
-                            const share = customersDashboard.totalOrders > 0 ? (Number(status.count || 0) / Number(customersDashboard.totalOrders || 1)) * 100 : 0;
+                            const share = confirmationMetrics.total > 0 ? (Number(status.count || 0) / confirmationMetrics.total) * 100 : 0;
                             return (
-                              <tr key={`analytics-${status.value}`} style={{ background: index % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
-                                <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{status.label}</td>
-                                <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatInteger(status.count || 0)}</td>
-                                <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{share.toFixed(1)}%</td>
+                              <tr key={`anl-status-${status.value}`} style={{ background: index % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                                <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{status.label}</td>
+                                <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatInteger(status.count || 0)}</td>
+                                <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{share.toFixed(1)}%</td>
                               </tr>
                             );
                           })}
@@ -8758,31 +8805,119 @@ export default function App() {
                       <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
                         <thead>
                           <tr>
-                            {["Owner", "Orders", "Confirmed", "Delivered"].map((head) => (
-                              <th key={head} style={{ textAlign: "left", padding: "14px 12px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247, 243, 237, 0.92)" }}>
-                                {head}
-                              </th>
+                            {["Owner", "Leads", "Confirmed", "Conf. Rate"].map((head) => (
+                              <th key={head} style={{ textAlign: "left", padding: "12px 12px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247, 243, 237, 0.92)" }}>{head}</th>
                             ))}
                           </tr>
                         </thead>
                         <tbody>
                           {teamWorkloadRows.map((row, index) => (
-                            <tr key={`analytics-owner-${row.owner}`} style={{ background: index % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
-                              <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{row.owner}</td>
-                              <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.total}</td>
-                              <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.confirmed}</td>
-                              <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.delivered}</td>
+                            <tr key={`anl-owner-${row.owner}`} style={{ background: index % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{row.owner}</td>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.total}</td>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.confirmed}</td>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.total > 0 ? `${((row.confirmed / row.total) * 100).toFixed(1)}%` : "—"}</td>
                             </tr>
                           ))}
                           {teamWorkloadRows.length === 0 ? (
-                            <tr>
-                              <td colSpan={4} style={{ padding: 24, color: textSoft }}>No owner assignment yet.</td>
-                            </tr>
+                            <tr><td colSpan={4} style={{ padding: 24, color: textSoft }}>No owner assignments yet.</td></tr>
                           ) : null}
                         </tbody>
                       </table>
                     </div>
                   </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr", "1fr", "1fr"), gap: 16 }}>
+                    <div style={{ overflowX: "auto", border: `1px solid ${cardBorder}`, borderRadius: 20 }}>
+                      <div style={{ padding: "12px 16px", fontWeight: 800, fontSize: 13, borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", borderRadius: "20px 20px 0 0" }}>By product</div>
+                      <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+                        <thead>
+                          <tr>
+                            {["Product", "Leads", "Confirmed", "Conf. Rate"].map((head) => (
+                              <th key={head} style={{ textAlign: "left", padding: "12px 12px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247, 243, 237, 0.92)" }}>{head}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {confirmationMetrics.productRows.map((row, index) => (
+                            <tr key={`anl-prod-${row.productId}`} style={{ background: index % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{row.productName}</td>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.total}</td>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.confirmed}</td>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.confirmationRate.toFixed(1)}%</td>
+                            </tr>
+                          ))}
+                          {confirmationMetrics.productRows.length === 0 ? (
+                            <tr><td colSpan={4} style={{ padding: 24, color: textSoft }}>No data yet.</td></tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div style={{ overflowX: "auto", border: `1px solid ${cardBorder}`, borderRadius: 20 }}>
+                      <div style={{ padding: "12px 16px", fontWeight: 800, fontSize: 13, borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", borderRadius: "20px 20px 0 0" }}>By city</div>
+                      <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+                        <thead>
+                          <tr>
+                            {["City", "Leads", "Confirmed", "Conf. Rate"].map((head) => (
+                              <th key={head} style={{ textAlign: "left", padding: "12px 12px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247, 243, 237, 0.92)" }}>{head}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {confirmationMetrics.cityRows.map((row, index) => (
+                            <tr key={`anl-city-${row.city}`} style={{ background: index % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{row.city}</td>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.total}</td>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.confirmed}</td>
+                              <td style={{ padding: "12px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.confirmationRate.toFixed(1)}%</td>
+                            </tr>
+                          ))}
+                          {confirmationMetrics.cityRows.length === 0 ? (
+                            <tr><td colSpan={4} style={{ padding: 24, color: textSoft }}>No city data yet.</td></tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Import History / Audit tab */}
+              <div style={{ display: ordersTab === "audit" ? "grid" : "none", gap: 16 }}>
+                <div style={{ ...styles.card, padding: 22 }}>
+                  <div style={styles.sectionHeader}>
+                    <div>
+                      <div style={styles.sectionEyebrow}>Import history</div>
+                      <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Excel import log</div>
+                      <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Last {ordersImportHistory.length} imports. Up to 20 entries are kept per session.</div>
+                    </div>
+                  </div>
+                  {ordersImportHistory.length === 0 ? (
+                    <div style={{ color: textSoft, padding: "20px 0" }}>No imports yet this session.</div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 12 }}>
+                      {ordersImportHistory.map((record, index) => (
+                        <div key={index} style={{ padding: "16px 18px", borderRadius: 16, border: `1px solid ${cardBorder}`, background: "rgba(255,255,255,0.85)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                            <div>
+                              <div style={{ fontWeight: 800 }}>Import #{ordersImportHistory.length - index}</div>
+                              <div style={{ color: textSoft, fontSize: 12, marginTop: 3 }}>{record.importedAt ? new Date(record.importedAt).toLocaleString() : "Unknown time"}</div>
+                            </div>
+                            <span style={{ ...styles.badge, background: "rgba(22,163,74,0.1)", color: green, border: "1px solid rgba(22,163,74,0.2)" }}>{record.summary}</span>
+                          </div>
+                          {record.reasonCounts ? (
+                            <div style={{ marginTop: 10, color: textSoft, fontSize: 13, lineHeight: 1.6 }}>
+                              Issues: missing code {record.reasonCounts.missingCode || 0} · missing phone {record.reasonCounts.missingPhone || 0} · unmatched product {record.reasonCounts.unknownProduct || 0} · status changes {record.reasonCounts.statusChangesDetected || 0}
+                            </div>
+                          ) : null}
+                          {record.detectedHeaders?.length ? (
+                            <div style={{ marginTop: 6, color: textSoft, fontSize: 12 }}>Headers: {record.detectedHeaders.join(" · ")}</div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
