@@ -934,7 +934,7 @@ export default function App() {
   const showExecutiveAdminTools = activePage === "settingsAudit" && supabaseEnabled;
   const [ordersTab, setOrdersTab] = useState("pipeline");
   const [shippingTab, setShippingTab] = useState("queue");
-  const [productsStockTab, setProductsStockTab] = useState("simple");
+
   const [_trackingTab, _setTrackingTab] = useState("product-tracking");
   const [profitTab, setProfitTab] = useState("overview");
   const [ownerInjectionTzs, setOwnerInjectionTzs] = useState(0);
@@ -1107,6 +1107,29 @@ export default function App() {
   });
   const [shippingListPage, setShippingListPage] = useState(1);
   const [auditSearch, setAuditSearch] = useState("");
+  const [stockTab, setStockTab] = useState("overview");
+  const [stockPurchases, setStockPurchases] = useState(() => {
+    if (supabaseEnabled) return Array.isArray(initialBrowserSnapshot?.stockPurchases) ? initialBrowserSnapshot.stockPurchases : [];
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? (JSON.parse(raw).stockPurchases || []) : [];
+    } catch { return []; }
+  });
+  const [stockMovements, setStockMovements] = useState(() => {
+    if (supabaseEnabled) return Array.isArray(initialBrowserSnapshot?.stockMovements) ? initialBrowserSnapshot.stockMovements : [];
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? (JSON.parse(raw).stockMovements || []) : [];
+    } catch { return []; }
+  });
+  const [purchaseForm, setPurchaseForm] = useState({
+    product_id: "", quantity_ordered: "", source_country: "dubai", supplier_name: "",
+    purchase_date: "", expected_arrival_date: "", usable_stock_date: "",
+    buy_price_per_unit_usd: "", shipping_cost_usd: "", sourcing_cost_usd: "",
+    other_charges_tsh: "", quantity_received: "", status: "ordered", notes: "",
+  });
+  const [editingPurchaseId, setEditingPurchaseId] = useState(null);
+  const [manualAdjForm, setManualAdjForm] = useState({ product_id: "", quantity_change: "", reason: "stock_count_correction", note: "" });
 
   const [products, setProducts] = useState(() => {
     if (supabaseEnabled) return Array.isArray(initialBrowserSnapshot?.products) ? initialBrowserSnapshot.products.map(sanitizeProductRecord) : [];
@@ -1147,8 +1170,10 @@ export default function App() {
       situationData,
       metaAdsState,
       importMeta,
+      stockPurchases,
+      stockMovements,
     }),
-    [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking]
+    [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking, stockPurchases, stockMovements]
   );
 
   useEffect(() => {
@@ -1160,8 +1185,10 @@ export default function App() {
       situationData,
       metaAdsState,
       importMeta,
+      stockPurchases,
+      stockMovements,
     };
-  }, [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking]);
+  }, [customers, importMeta, metaAdsState, products, serviceForm, situationData, tracking, stockPurchases, stockMovements]);
 
   const readBrowserBackupSnapshot = useCallback(() => readLocalWorkspaceSnapshotFromStorage(), []);
 
@@ -1198,6 +1225,8 @@ export default function App() {
         lastOrdersImportAt: snapshot.importMeta?.lastOrdersImportAt || null,
         lastShippingImportAt: snapshot.importMeta?.lastShippingImportAt || null,
       },
+      stockPurchases: Array.isArray(snapshot.stockPurchases) ? snapshot.stockPurchases : [],
+      stockMovements: Array.isArray(snapshot.stockMovements) ? snapshot.stockMovements : [],
     };
 
     sharedHydratingRef.current = true;
@@ -1209,6 +1238,8 @@ export default function App() {
       setSituationData(normalizedSnapshot.situationData);
       setMetaAdsState(normalizedSnapshot.metaAdsState);
       setImportMeta(normalizedSnapshot.importMeta);
+      setStockPurchases(normalizedSnapshot.stockPurchases);
+      setStockMovements(normalizedSnapshot.stockMovements);
     } finally {
       window.setTimeout(() => {
         sharedHydratingRef.current = false;
@@ -2028,6 +2059,156 @@ export default function App() {
     [persistSharedSnapshot]
   );
 
+  const persistStockSnapshot = useCallback(
+    async (nextPurchases, nextMovements) => {
+      const nextSnapshot = {
+        ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+        stockPurchases: nextPurchases,
+        stockMovements: nextMovements,
+      };
+      latestSharedStateRef.current = nextSnapshot;
+      return persistSharedSnapshot(nextSnapshot, {
+        progressNotice: "Saving stock changes...",
+        successNotice: "Stock data synced",
+        failurePrefix: "Stock sync failed",
+      });
+    },
+    [persistSharedSnapshot]
+  );
+
+  const addStockMovement = useCallback((movement, currentMovements) => {
+    const entry = {
+      movement_id: `mv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      date: new Date().toISOString().slice(0, 10),
+      created_at: new Date().toISOString(),
+      ...movement,
+    };
+    return [...currentMovements, entry];
+  }, []);
+
+  const savePurchase = useCallback(() => {
+    const f = purchaseForm;
+    if (!f.product_id) return;
+    const qty = Math.max(0, Number(f.quantity_ordered) || 0);
+    const buyPriceUsd = Math.max(0, Number(f.buy_price_per_unit_usd) || 0);
+    const shippingUsd = Math.max(0, Number(f.shipping_cost_usd) || 0);
+    const sourcingUsd = Math.max(0, Number(f.sourcing_cost_usd) || 0);
+    const otherTsh = Math.max(0, Number(f.other_charges_tsh) || 0);
+    const exchangeRate = Number(serviceForm?.exchangeRate || USD_TO_TZS);
+    const otherUsd = otherTsh > 0 ? otherTsh / exchangeRate : 0;
+    const totalBuyCostUsd = qty * buyPriceUsd;
+    const totalLandedCostUsd = totalBuyCostUsd + shippingUsd + sourcingUsd + otherUsd;
+    const landedCostPerUnitUsd = qty > 0 ? totalLandedCostUsd / qty : 0;
+
+    const isEdit = Boolean(editingPurchaseId);
+    const purchaseId = editingPurchaseId || `pur-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const now = new Date().toISOString();
+
+    const record = {
+      id: purchaseId,
+      product_id: f.product_id,
+      quantity_ordered: qty,
+      quantity_received: Number(f.quantity_received) || 0,
+      source_country: f.source_country || "dubai",
+      supplier_name: f.supplier_name || "",
+      purchase_date: f.purchase_date || now.slice(0, 10),
+      expected_arrival_date: f.expected_arrival_date || "",
+      usable_stock_date: f.usable_stock_date || "",
+      buy_price_per_unit_usd: buyPriceUsd,
+      shipping_cost_usd: shippingUsd,
+      sourcing_cost_usd: sourcingUsd,
+      other_charges_tsh: otherTsh,
+      other_charges_usd: otherUsd,
+      total_buy_cost_usd: totalBuyCostUsd,
+      total_landed_cost_usd: totalLandedCostUsd,
+      landed_cost_per_unit_usd: landedCostPerUnitUsd,
+      status: f.status || "ordered",
+      notes: f.notes || "",
+      created_at: isEdit ? (stockPurchases.find((p) => p.id === purchaseId)?.created_at || now) : now,
+      updated_at: now,
+    };
+
+    setStockPurchases((prev) => {
+      const next = isEdit ? prev.map((p) => p.id === purchaseId ? record : p) : [...prev, record];
+      setStockMovements((prevMov) => {
+        const movement = {
+          product_id: f.product_id,
+          type: isEdit ? "stock_correction" : "purchase_ordered",
+          quantity_change: qty,
+          before_quantity: 0,
+          after_quantity: qty,
+          source_reference: purchaseId,
+          note: `Purchase ${isEdit ? "updated" : "created"}: ${f.supplier_name || "supplier"}`,
+        };
+        const nextMov = addStockMovement(movement, prevMov);
+        void persistStockSnapshot(next, nextMov);
+        return nextMov;
+      });
+      return next;
+    });
+    setEditingPurchaseId(null);
+    setPurchaseForm({ product_id: "", quantity_ordered: "", source_country: "dubai", supplier_name: "", purchase_date: "", expected_arrival_date: "", usable_stock_date: "", buy_price_per_unit_usd: "", shipping_cost_usd: "", sourcing_cost_usd: "", other_charges_tsh: "", quantity_received: "", status: "ordered", notes: "" });
+  }, [purchaseForm, editingPurchaseId, stockPurchases, serviceForm, addStockMovement, persistStockSnapshot]);
+
+  const deletePurchase = useCallback((purchaseId) => {
+    setStockPurchases((prev) => {
+      const next = prev.filter((p) => p.id !== purchaseId);
+      setStockMovements((prevMov) => {
+        void persistStockSnapshot(next, prevMov);
+        return prevMov;
+      });
+      return next;
+    });
+  }, [persistStockSnapshot]);
+
+  const updatePurchaseStatus = useCallback((purchaseId, newStatus, quantityReceived) => {
+    setStockPurchases((prev) => {
+      const purchase = prev.find((p) => p.id === purchaseId);
+      if (!purchase) return prev;
+      const qty = quantityReceived != null ? Math.max(0, Number(quantityReceived) || 0) : purchase.quantity_received;
+      const updated = { ...purchase, status: newStatus, quantity_received: qty, updated_at: new Date().toISOString() };
+      const next = prev.map((p) => p.id === purchaseId ? updated : p);
+      setStockMovements((prevMov) => {
+        const movement = {
+          product_id: purchase.product_id,
+          type: newStatus === "received" ? "purchase_received" : "stock_correction",
+          quantity_change: newStatus === "received" ? qty : 0,
+          before_quantity: 0,
+          after_quantity: qty,
+          source_reference: purchaseId,
+          note: `Purchase marked as ${newStatus}${quantityReceived != null ? ` (qty: ${qty})` : ""}`,
+        };
+        const nextMov = addStockMovement(movement, prevMov);
+        void persistStockSnapshot(next, nextMov);
+        return nextMov;
+      });
+      return next;
+    });
+  }, [addStockMovement, persistStockSnapshot]);
+
+  const saveManualAdjustment = useCallback(() => {
+    const { product_id, quantity_change, reason, note } = manualAdjForm;
+    if (!product_id || !quantity_change) return;
+    const delta = Number(quantity_change);
+    if (!Number.isFinite(delta) || delta === 0) return;
+    const adjId = `adj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setStockMovements((prev) => {
+      const movement = {
+        product_id,
+        type: "manual_adjustment",
+        quantity_change: delta,
+        before_quantity: 0,
+        after_quantity: 0,
+        source_reference: adjId,
+        note: `${reason.replace(/_/g, " ")}: ${note || "no note"}`,
+      };
+      const next = addStockMovement(movement, prev);
+      setStockPurchases((prevPur) => { void persistStockSnapshot(prevPur, next); return prevPur; });
+      return next;
+    });
+    setManualAdjForm({ product_id: "", quantity_change: "", reason: "stock_count_correction", note: "" });
+  }, [manualAdjForm, addStockMovement, persistStockSnapshot]);
+
   const updateProductAdInput = useCallback((productId, field, value) => {
     setSituationData((prev) => ({
       ...prev,
@@ -2353,7 +2534,8 @@ export default function App() {
         const deliveryRate = confirmed > 0 ? delivered / confirmed : 0;
         const margin = productPerformance.profitMargin;
         const initialStock = Number(product.totalQty || 0);
-        const stockPurchases = [{
+        const realPurchasesForProduct = stockPurchases.filter((p) => p.product_id === product.id);
+        const productStockPurchases = realPurchasesForProduct.length > 0 ? realPurchasesForProduct : [{
           product_id: product.id,
           quantity_received: product.totalQty,
           quantity_ordered: product.totalQty,
@@ -2367,9 +2549,10 @@ export default function App() {
         const reservedStock = calculateReservedStock(product.id, productOrders);
         const deliveredStock = calculateDeliveredStock(product.id, productOrders);
         const returnedStock = calculateReturnedStock(product.id, productOrders);
-        const availableStock = calculateAvailableStock(product.id, stockPurchases, productOrders);
+        const availableStock = calculateAvailableStock(product.id, productStockPurchases, productOrders);
         const currentStock = Math.max(0, availableStock + reservedStock);
-        const stockValue = calculateAvailableStockValue(product.id, stockPurchases, productOrders, USD_TO_TZS);
+        const stockValue = calculateAvailableStockValue(product.id, productStockPurchases, productOrders, USD_TO_TZS);
+        const incomingStock = productStockPurchases.filter((p) => ["ordered", "in_transit"].includes(p.status)).reduce((s, p) => s + Math.max(0, Number(p.quantity_ordered || 0) - Number(p.quantity_received || 0)), 0);
         const salesPerDay = deliveredUnits > 0 ? deliveredUnits / 30 : 0;
         const arrivalDays = Number(product.estimatedArrivalDays || 0);
         const safetyFactor = 1.3;
@@ -2458,6 +2641,7 @@ export default function App() {
           reorderPoint,
           reorderSoonPoint,
           reorderStatus,
+          incomingStock,
           missingAmountDeliveredOrders: Number(customerMetrics.missingAmountDeliveredOrders || 0),
           estimatedRevenueOrders: Number(customerMetrics.estimatedRevenueOrders || 0),
           missingRegionOrders: Number(customerMetrics.missingRegionOrders || 0),
@@ -2466,7 +2650,7 @@ export default function App() {
           };
         })
         .sort((a, b) => b.score - a.score),
-    [operationalCustomers, products]
+    [operationalCustomers, products, stockPurchases]
   );
 
   const productDashboard = useMemo(() => {
@@ -5487,6 +5671,75 @@ export default function App() {
       });
   }, [productDashboard]);
 
+  const stockAlerts = useMemo(() => {
+    const today = getTodayString();
+    const alerts = [];
+    productDashboard.forEach((product) => {
+      const minStock = Math.max(0, Number(product.minStockQuantity ?? situationData?.productAlertThresholds?.minStockQuantity ?? 3));
+      const avail = Number(product.availableStock || 0);
+      const incoming = Number(product.incomingStock || 0);
+      const reserved = Number(product.reservedStock || 0);
+      const landedCost = Number(product.unitProductCost || 0);
+
+      if (avail <= 0 && incoming <= 0) {
+        alerts.push({ productId: product.id, productName: product.name, type: "out_of_stock", severity: "critical", message: "Out of stock — no incoming stock" });
+      } else if (avail <= 0) {
+        alerts.push({ productId: product.id, productName: product.name, type: "out_of_stock", severity: "critical", message: `Out of stock — ${incoming} units incoming` });
+      } else if (avail <= minStock) {
+        alerts.push({ productId: product.id, productName: product.name, type: "low_stock", severity: "warning", message: `Low stock: ${avail} units (threshold: ${minStock})` });
+      }
+      if (avail > 0 && landedCost <= 0) {
+        alerts.push({ productId: product.id, productName: product.name, type: "missing_landed_cost", severity: "info", message: "Available stock but no landed cost configured" });
+      }
+      if (reserved > 0 && reserved > avail + incoming) {
+        alerts.push({ productId: product.id, productName: product.name, type: "oversold", severity: "critical", message: `Oversold: ${reserved} reserved vs ${avail} available` });
+      }
+    });
+    stockPurchases.forEach((purchase) => {
+      if (["ordered", "in_transit"].includes(purchase.status) && purchase.expected_arrival_date && purchase.expected_arrival_date < today) {
+        const prod = products.find((p) => p.id === purchase.product_id);
+        alerts.push({ productId: purchase.product_id, productName: prod?.name || purchase.product_id, type: "delayed_incoming", severity: "warning", message: `Incoming shipment overdue since ${purchase.expected_arrival_date}` });
+      }
+    });
+    return alerts;
+  }, [productDashboard, stockPurchases, products, situationData]);
+
+  const stockAuditData = useMemo(() => {
+    const totalProducts = products.length;
+    let totalAvailable = 0, totalReserved = 0, totalIncoming = 0, totalDelivered = 0, totalReturned = 0;
+    let missingCostCount = 0, negativeStockCount = 0;
+    const perProduct = productDashboard.map((product) => {
+      const avail = Number(product.availableStock || 0);
+      const reserved = Number(product.reservedStock || 0);
+      const incoming = Number(product.incomingStock || 0);
+      const delivered = Number(product.deliveredStock || 0);
+      const returned = Number(product.returnedStock || 0);
+      const cost = Number(product.unitProductCost || 0);
+      totalAvailable += avail;
+      totalReserved += reserved;
+      totalIncoming += incoming;
+      totalDelivered += delivered;
+      totalReturned += returned;
+      if (avail > 0 && cost <= 0) missingCostCount++;
+      if (avail < 0) negativeStockCount++;
+      const manualAdj = stockMovements.filter((m) => m.product_id === product.id && m.type === "manual_adjustment").reduce((s, m) => s + Number(m.quantity_change || 0), 0);
+      return {
+        id: product.id,
+        name: product.name,
+        available: avail,
+        reserved,
+        incoming,
+        delivered,
+        returned,
+        manualAdjustments: manualAdj,
+        landedCostUsd: cost,
+        stockValueUsd: Number(product.stockValueUsd || 0),
+      };
+    });
+    const totalStockValueUsd = perProduct.reduce((s, r) => s + r.stockValueUsd, 0);
+    return { totalProducts, totalAvailable, totalReserved, totalIncoming, totalDelivered, totalReturned, missingCostCount, negativeStockCount, totalStockValueUsd, perProduct };
+  }, [productDashboard, stockMovements, products]);
+
   const taskCenterData = useMemo(() => {
     const tasks = [];
 
@@ -5782,23 +6035,6 @@ export default function App() {
     };
   }, [liveAutomationSummary.totalOperationalCostTzs, liveAutomationSummary.totalRevenueTzs, situationsSummary.fixedChargesTzs]);
 
-  const stockValueSummary = useMemo(() => {
-    const today = parseDateInput(getTodayString()) || new Date();
-    return products.reduce(
-      (acc, product) => {
-        const dashboardRow = productDashboardMap[product.id];
-        const availableStock = Number(dashboardRow?.availableStock ?? product.totalQty ?? 0);
-        const stockValueTzs = availableStock * getUnitProductCostUSD(product) * USD_TO_TZS;
-        const orderedAt = parseDateInput(product.stockOrderedAt);
-        const ageDays = orderedAt && !Number.isNaN(orderedAt.getTime()) ? Math.max(0, Math.round((today - orderedAt) / 86400000)) : 0;
-        acc.totalValueTzs += stockValueTzs;
-        if (ageDays >= 60) acc.aged60Products += 1;
-        if (ageDays >= 90) acc.aged90Products += 1;
-        return acc;
-      },
-      { totalValueTzs: 0, aged60Products: 0, aged90Products: 0 }
-    );
-  }, [productDashboardMap, products]);
 
   const profitCenterRows = useMemo(() => {
     const baseRows = productDashboard.map((product) => {
@@ -6462,7 +6698,7 @@ export default function App() {
           <SidebarItem active={activePage === "executive"} onClick={() => setActivePage("executive")} icon={<BarChart3 size={18} />} label="Home" />
           <SidebarItem active={activePage === "customersOrders"} onClick={() => { setActivePage("customersOrders"); setOrdersTab("pipeline"); }} icon={<Users size={18} />} label="Orders" />
           <SidebarItem active={activePage === "shipping"} onClick={() => { setActivePage("shipping"); setShippingTab("queue"); }} icon={<ShoppingBag size={18} />} label="Shipping" />
-          <SidebarItem active={["products", "stock", "multiDashboard"].includes(activePage)} onClick={() => { setActivePage("products"); setProductsStockTab("simple"); }} icon={<Archive size={18} />} label="Products & Stock" />
+          <SidebarItem active={["products", "stock", "multiDashboard"].includes(activePage)} onClick={() => { setActivePage("products"); setStockTab("overview"); }} icon={<Archive size={18} />} label="Products & Stock" />
           <SidebarItem active={activePage === "tracking"} onClick={() => setActivePage("tracking")} icon={<Calculator size={18} />} label="Ads & Tracking" />
           <SidebarItem active={["serviceSum", "situations", "profitCenter"].includes(activePage)} onClick={() => { setActivePage("profitCenter"); setProfitTab("overview"); }} icon={<Wallet size={18} />} label="Profit" />
           <SidebarItem active={["taskCenter", "calendar", "team", "alerts"].includes(activePage)} onClick={() => setActivePage("taskCenter")} icon={<ClipboardList size={18} />} label="Decisions" />
@@ -7672,71 +7908,61 @@ export default function App() {
             <div style={{ display: "grid", gap: 20 }}>
               <PageHeader
                 eyebrow="Products & Stock"
-                title="Catalog and inventory control"
-                description="Manage the product catalog, unit economics and stock structure from one focused operating page."
+                title="Catalog and stock management"
+                description="Manage product catalog, stock purchases, availability and movements from one page."
                 action={(
                   <>
                     {clearProductsConfirm ? (
                       <>
                         <span style={{ fontSize: 13, color: red, fontWeight: 700 }}>Delete all products?</span>
-                        <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca" }} onClick={handleClearAllProducts}>
-                          Yes, delete all
-                        </button>
-                        <button style={styles.btnSecondary} onClick={() => setClearProductsConfirm(false)}>
-                          Cancel
-                        </button>
+                        <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca" }} onClick={handleClearAllProducts}>Yes, delete all</button>
+                        <button style={styles.btnSecondary} onClick={() => setClearProductsConfirm(false)}>Cancel</button>
                       </>
                     ) : (
                       <button style={{ ...styles.btnSecondary, color: red, borderColor: "#fecaca" }} onClick={() => setClearProductsConfirm(true)}>
                         Clear all products
                       </button>
                     )}
-                    <button style={styles.btnSecondary} onClick={() => { setActivePage("stock"); setProductsStockTab("advanced"); }}>
-                      Stock board
-                    </button>
-                    <button style={styles.btnPrimary} onClick={() => setActivePage("multiDashboard")}>
-                      New stock batch
+                    <button style={styles.btnPrimary} onClick={() => setStockTab("purchases")}>
+                      New product
                     </button>
                   </>
                 )}
               />
               <InlineTabs
                 items={[
-                  { value: "simple", label: "Simple View" },
-                  { value: "advanced", label: "Advanced View" },
+                  { value: "catalog", label: "Product Catalog" },
+                  { value: "purchases", label: "Stock Purchases" },
+                  { value: "incoming", label: "Incoming Shipments" },
+                  { value: "overview", label: "Stock Overview" },
+                  { value: "movements", label: "Stock Movements" },
+                  { value: "alerts", label: "Stock Alerts" },
+                  { value: "audit", label: "Stock Audit" },
                 ]}
-                value={productsStockTab}
-                onChange={setProductsStockTab}
+                value={stockTab}
+                onChange={setStockTab}
               />
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
-                <KpiCard icon={<Boxes size={18} />} title="Catalog size" value={productsCatalogSummary.totalProducts} sub="Products ready in the catalog" />
-                <KpiCard icon={<Archive size={18} />} title="Total units" value={productsCatalogSummary.totalUnits} sub="Imported stock volume" />
-                <KpiCard icon={<Wallet size={18} />} title="Import budget" value={`${formatTZS(productsCatalogSummary.totalImportBudgetTzs)} | ${formatUsdFromTzs(productsCatalogSummary.totalImportBudgetTzs)}`} sub="Purchase + shipping + charges in TSh and USD" valueColor={accent} />
-                <KpiCard icon={<TrendingUp size={18} />} title="Top score" value={`${productsCatalogSummary.topScore}/100`} sub={bestProduct ? bestProduct.name : "No highlighted product"} valueColor={green} />
+                <KpiCard icon={<Boxes size={18} />} title="Catalog" value={productsCatalogSummary.totalProducts} sub="Products in catalog" />
+                <KpiCard icon={<Archive size={18} />} title="Available stock" value={stockAuditData.totalAvailable} sub={`${stockAuditData.totalIncoming} incoming`} />
+                <KpiCard icon={<AlertTriangle size={18} />} title="Alerts" value={stockAlerts.length} sub={`${stockAlerts.filter((a) => a.severity === "critical").length} critical`} valueColor={stockAlerts.some((a) => a.severity === "critical") ? red : amber} />
+                <KpiCard icon={<Wallet size={18} />} title="Stock value" value={formatUSD(stockAuditData.totalStockValueUsd)} sub="Available stock valuation" valueColor={accent} />
               </div>
 
+              {/* ===== TAB: PRODUCT CATALOG ===== */}
+              <div style={{ display: stockTab === "catalog" ? "grid" : "none", gap: 16 }}>
               <div style={{ ...styles.card, padding: 22 }}>
                 <div style={styles.sectionHeader}>
                   <div>
-                    <div style={styles.sectionEyebrow}>Catalog intelligence</div>
-                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Produits en stock</div>
-                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Tous les produits approvisionnés apparaissent ici automatiquement, avec leur coût réel, leur quantité et leur profil logistique.</div>
+                    <div style={styles.sectionEyebrow}>Product catalog</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>All products</div>
+                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Define product catalog, prices and mapping codes. Mapping codes link products to ad campaigns.</div>
                   </div>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     {editingProductId ? (
-                      <button style={styles.btnSecondary} onClick={cancelEditingProduct}>
-                        Cancel Edit
-                      </button>
+                      <button style={styles.btnSecondary} onClick={cancelEditingProduct}>Cancel Edit</button>
                     ) : null}
-                    <button style={styles.btnSecondary} onClick={() => setActivePage("stock")}>
-                      Gestion stock
-                    </button>
-                    <button style={styles.btnPrimary} onClick={() => setActivePage("multiDashboard")}>
-                      Nouveau lot stock
-                    </button>
-                    <div style={{ ...styles.badge, background: "rgba(29,95,208,0.08)", color: accent, border: "1px solid rgba(29,95,208,0.12)" }}>
-                      Live catalog
-                    </div>
+                    <button style={styles.btnPrimary} onClick={() => setStockTab("purchases")}>Add Product</button>
                   </div>
                 </div>
 
@@ -7948,13 +8174,14 @@ export default function App() {
                   )}
                 </div>
 
+                {/* Performance dashboard stays in catalog tab, below the product table */}
                 <div style={{ ...styles.softStat, marginTop: 18, padding: 18 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
                     <div>
-                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: textSoft }}>Product performance dashboard</div>
-                      <div style={{ marginTop: 8, fontSize: 20, fontWeight: 900 }}>Ads spend and COD funnel by product</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: textSoft }}>Funnel stats by product</div>
+                      <div style={{ marginTop: 8, fontSize: 20, fontWeight: 900 }}>Confirmation funnel by product</div>
                       <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.5 }}>
-                        Enter manual ads spend, leads, confirmed orders and delivered orders per product. CPA, confirmation rate and delivery rate are calculated automatically with safe zero handling.
+                        Confirmation and delivery rates per product. For profit analysis, use the Profit Center page.
                       </div>
                     </div>
                   </div>
@@ -8151,75 +8378,427 @@ export default function App() {
                   </div>
                 </div>
               </div>
-            </div>
-          )}
-
-{activePage === "stock" && (
-            <div style={{ ...styles.card, padding: 22 }}>
-              <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(6, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 16, marginBottom: 16 }}>
-                <KpiCard icon={<Archive size={18} />} title="Products tracked" value={stockForecastRows.length} sub="Products with live stock forecast" />
-                <KpiCard icon={<AlertTriangle size={18} />} title="Critical stockouts" value={stockForecastRows.filter((product) => product.urgency === "Critical").length} sub="Projected stockout in 7 days or less" valueColor={red} />
-                <KpiCard icon={<TrendingUp size={18} />} title="Watchlist" value={stockForecastRows.filter((product) => product.urgency === "Watch").length} sub="Projected stockout in 14 days or less" valueColor={amber} />
-                <KpiCard icon={<CalendarDays size={18} />} title="Next stockout" value={stockForecastRows[0]?.projectedStockoutDate || "N/A"} sub={stockForecastRows[0] ? stockForecastRows[0].name : "No projection yet"} />
-                <KpiCard icon={<Wallet size={18} />} title="Stock Value" value={formatUsdFromTzs(stockValueSummary.totalValueTzs)} sub="Available stock valuation" valueColor={accent} />
-                <KpiCard icon={<Archive size={18} />} title="Aging 60+ days" value={stockValueSummary.aged60Products} sub={`${stockValueSummary.aged90Products} products above 90 days`} valueColor={amber} />
               </div>
-              <div style={styles.sectionHeader}>
-                <div>
-                  <div style={{ fontSize: 22, fontWeight: 800 }}>Gestion de stock</div>
-                  <div style={{ color: textSoft, marginTop: 6 }}>Suivez ici le stock réel, les quantités réservées, les sorties en livraison et le moment idéal pour recommander.</div>
-                </div>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <button style={styles.btnSecondary} onClick={() => setActivePage("products")}>
-                    Produits en stock
-                  </button>
-                  <button style={styles.btnPrimary} onClick={() => setActivePage("multiDashboard")}>
-                    Approvisionnement
-                  </button>
-                </div>
-              </div>
+              {/* end catalog tab */}
 
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
-                  <thead>
-                    <tr>
-                      {["Product", "Source", "Initial Stock", "In Preparation", "Out Delivered", "Delivered", "Returned", "Reserved", "In Stock", "Available", "Sales/Day", "Min Stock", "Reorder", "Forecast", "Stockout Date", "Status", "Estimated Arrival", "Arrival", "Transit Days"].map((head) => (
-                        <th key={head} style={{ textAlign: "left", padding: "14px 12px", color: textSoft, fontSize: 13, borderBottom: `1px solid ${cardBorder}`, background: "#f8fafc" }}>{head}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stockForecastRows.map((product) => {
-                      const stockStatus = product.availableStock <= 0 ? "Out of Stock" : product.availableStock <= 10 ? "Low Stock" : "In Stock";
+              {/* ===== TAB: STOCK PURCHASES ===== */}
+              <div style={{ display: stockTab === "purchases" ? "grid" : "none", gap: 16 }}>
+              <div style={{ ...styles.card, padding: 22 }}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <div style={styles.sectionEyebrow}>Stock purchases</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>{editingPurchaseId ? "Edit purchase" : "New stock purchase"}</div>
+                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Record a new stock order. Only received purchases count toward available stock.</div>
+                  </div>
+                  {editingPurchaseId ? (
+                    <button style={styles.btnSecondary} onClick={() => { setEditingPurchaseId(null); setPurchaseForm({ product_id: "", quantity_ordered: "", source_country: "dubai", supplier_name: "", purchase_date: "", expected_arrival_date: "", usable_stock_date: "", buy_price_per_unit_usd: "", shipping_cost_usd: "", sourcing_cost_usd: "", other_charges_tsh: "", quantity_received: "", status: "ordered", notes: "" }); }}>Cancel</button>
+                  ) : null}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 14 }}>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Product</label>
+                    <select style={styles.input} value={purchaseForm.product_id} onChange={(e) => setPurchaseForm((f) => ({ ...f, product_id: e.target.value }))}>
+                      <option value="">— Select product —</option>
+                      {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Qty ordered</label>
+                    <input style={styles.input} type="number" min="0" value={purchaseForm.quantity_ordered} onChange={(e) => setPurchaseForm((f) => ({ ...f, quantity_ordered: e.target.value }))} placeholder="100" />
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Source country</label>
+                    <select style={styles.input} value={purchaseForm.source_country} onChange={(e) => setPurchaseForm((f) => ({ ...f, source_country: e.target.value }))}>
+                      <option value="dubai">Dubai</option>
+                      <option value="china">China</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Buy price / unit (USD)</label>
+                    <input style={styles.input} type="number" min="0" step="0.01" value={purchaseForm.buy_price_per_unit_usd} onChange={(e) => setPurchaseForm((f) => ({ ...f, buy_price_per_unit_usd: e.target.value }))} placeholder="5.00" />
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Shipping cost (USD)</label>
+                    <input style={styles.input} type="number" min="0" step="0.01" value={purchaseForm.shipping_cost_usd} onChange={(e) => setPurchaseForm((f) => ({ ...f, shipping_cost_usd: e.target.value }))} placeholder="0" />
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Sourcing cost (USD)</label>
+                    <input style={styles.input} type="number" min="0" step="0.01" value={purchaseForm.sourcing_cost_usd} onChange={(e) => setPurchaseForm((f) => ({ ...f, sourcing_cost_usd: e.target.value }))} placeholder="0" />
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Other charges (TZS)</label>
+                    <input style={styles.input} type="number" min="0" value={purchaseForm.other_charges_tsh} onChange={(e) => setPurchaseForm((f) => ({ ...f, other_charges_tsh: e.target.value }))} placeholder="0" />
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Supplier name</label>
+                    <input style={styles.input} value={purchaseForm.supplier_name} onChange={(e) => setPurchaseForm((f) => ({ ...f, supplier_name: e.target.value }))} placeholder="Supplier or agent" />
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Purchase date</label>
+                    <input style={styles.input} type="date" value={purchaseForm.purchase_date} onChange={(e) => setPurchaseForm((f) => ({ ...f, purchase_date: e.target.value }))} />
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Expected arrival</label>
+                    <input style={styles.input} type="date" value={purchaseForm.expected_arrival_date} onChange={(e) => setPurchaseForm((f) => ({ ...f, expected_arrival_date: e.target.value }))} />
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Usable stock date</label>
+                    <input style={styles.input} type="date" value={purchaseForm.usable_stock_date} onChange={(e) => setPurchaseForm((f) => ({ ...f, usable_stock_date: e.target.value }))} />
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Status</label>
+                    <select style={styles.input} value={purchaseForm.status} onChange={(e) => setPurchaseForm((f) => ({ ...f, status: e.target.value }))}>
+                      <option value="ordered">Ordered</option>
+                      <option value="in_transit">In Transit</option>
+                      <option value="arrived">Arrived</option>
+                      <option value="received">Received</option>
+                      <option value="delayed">Delayed</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Qty received</label>
+                    <input style={styles.input} type="number" min="0" value={purchaseForm.quantity_received} onChange={(e) => setPurchaseForm((f) => ({ ...f, quantity_received: e.target.value }))} placeholder="0" />
+                  </div>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>Notes</label>
+                    <input style={styles.input} value={purchaseForm.notes} onChange={(e) => setPurchaseForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Optional notes" />
+                  </div>
+                </div>
+                {purchaseForm.product_id && Number(purchaseForm.quantity_ordered) > 0 ? (
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 12, marginTop: 14, padding: 16, borderRadius: 16, background: "rgba(247,243,237,0.85)", border: `1px solid ${cardBorder}` }}>
+                    {(() => {
+                      const qty = Number(purchaseForm.quantity_ordered) || 0;
+                      const buy = Number(purchaseForm.buy_price_per_unit_usd) || 0;
+                      const ship = Number(purchaseForm.shipping_cost_usd) || 0;
+                      const src = Number(purchaseForm.sourcing_cost_usd) || 0;
+                      const otherUsd = (Number(purchaseForm.other_charges_tsh) || 0) / Number(serviceForm?.exchangeRate || USD_TO_TZS);
+                      const totalBuy = qty * buy;
+                      const totalLanded = totalBuy + ship + src + otherUsd;
+                      const perUnit = qty > 0 ? totalLanded / qty : 0;
                       return (
-                        <tr key={product.id}>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{product.name}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.source || "—"}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.initialStock}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.toPrepareUnits}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.outDeliveredUnits}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.deliveredUnits}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.returnedUnits}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.reservedStock}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.currentStock}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{product.availableStock}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.salesPerDay.toFixed(1)}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{product.reorderPoint}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}><span style={getDecisionStyle(product.reorderStatus)}>{product.reorderStatus}</span></td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.daysUntilStockout != null ? `${Math.max(1, Math.round(product.daysUntilStockout))} days left` : "No pace yet"}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.projectedStockoutDate}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}><span style={getDecisionStyle(stockStatus)}>{stockStatus}</span></td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.stockOrderedAt ? addDaysToDateString(product.stockOrderedAt, Number(product.estimatedArrivalDays || 0)) : "—"}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.source === "dubai" ? <span style={getDecisionStyle(product.stockArrivalStatus === "arrived" ? "Arrived" : "Pending")}>{product.stockArrivalStatus === "arrived" ? "Arrived" : `Pending (${product.nextArrivalCheckDate || "check"})`}</span> : <span style={getDecisionStyle("Arrived")}>Arrived</span>}</td>
-                          <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{product.estimatedArrivalDays ?? "—"}</td>
-                        </tr>
+                        <>
+                          <MiniStat label="Total buy cost" value={formatUSD(totalBuy)} tone="blue" />
+                          <MiniStat label="Total landed cost" value={formatUSD(totalLanded)} tone="amber" />
+                          <MiniStat label="Landed cost / unit" value={perUnit > 0 ? formatUSD(perUnit) : "N/A"} tone="green" />
+                        </>
                       );
-                    })}
-                  </tbody>
-                </table>
+                    })()}
+                  </div>
+                ) : null}
+                <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
+                  <button style={styles.btnPrimary} onClick={savePurchase}>{editingPurchaseId ? "Update Purchase" : "Save Purchase"}</button>
+                </div>
               </div>
+              <div style={{ ...styles.card, padding: 22 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 14 }}>All stock purchases</div>
+                {stockPurchases.length === 0 ? (
+                  <div style={{ color: textSoft }}>No stock purchases recorded yet.</div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+                      <thead>
+                        <tr>{["Product", "Source", "Qty Ordered", "Qty Received", "Buy/Unit (USD)", "Landed/Unit (USD)", "Total Landed (USD)", "Purchase Date", "Expected Arrival", "Status", "Supplier", "Actions"].map((h) => (
+                          <th key={h} style={{ textAlign: "left", padding: "12px 10px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", whiteSpace: "nowrap" }}>{h}</th>
+                        ))}</tr>
+                      </thead>
+                      <tbody>
+                        {stockPurchases.map((pur, idx) => {
+                          const prod = products.find((p) => p.id === pur.product_id);
+                          return (
+                            <tr key={pur.id} style={{ background: idx % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{prod?.name || pur.product_id}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.source_country || "—"}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.quantity_ordered}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.quantity_received || 0}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{formatUSD(pur.buy_price_per_unit_usd)}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700, color: accent }}>{formatUSD(pur.landed_cost_per_unit_usd)}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{formatUSD(pur.total_landed_cost_usd)}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.purchase_date || "—"}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.expected_arrival_date || "—"}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}><span style={getDecisionStyle(pur.status)}>{pur.status}</span></td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.supplier_name || "—"}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, whiteSpace: "nowrap" }}>
+                                <div style={{ display: "inline-flex", gap: 6 }}>
+                                  <button style={{ ...styles.btnSecondary, padding: "6px 10px", fontSize: 12 }} onClick={() => { setEditingPurchaseId(pur.id); setPurchaseForm({ product_id: pur.product_id, quantity_ordered: String(pur.quantity_ordered || ""), source_country: pur.source_country || "dubai", supplier_name: pur.supplier_name || "", purchase_date: pur.purchase_date || "", expected_arrival_date: pur.expected_arrival_date || "", usable_stock_date: pur.usable_stock_date || "", buy_price_per_unit_usd: String(pur.buy_price_per_unit_usd || ""), shipping_cost_usd: String(pur.shipping_cost_usd || ""), sourcing_cost_usd: String(pur.sourcing_cost_usd || ""), other_charges_tsh: String(pur.other_charges_tsh || ""), quantity_received: String(pur.quantity_received || ""), status: pur.status || "ordered", notes: pur.notes || "" }); }}>Edit</button>
+                                  <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca", padding: "6px 10px", fontSize: 12 }} onClick={() => deletePurchase(pur.id)}>Delete</button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+              </div>
+              {/* end purchases tab */}
+
+              {/* ===== TAB: INCOMING SHIPMENTS ===== */}
+              <div style={{ display: stockTab === "incoming" ? "grid" : "none", gap: 16 }}>
+              <div style={{ ...styles.card, padding: 22 }}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <div style={styles.sectionEyebrow}>Incoming shipments</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Purchases not yet received</div>
+                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Ordered and in-transit stock does not count toward available stock until marked as Received.</div>
+                  </div>
+                </div>
+                {(() => {
+                  const today = getTodayString();
+                  const incoming = stockPurchases.filter((p) => !["received", "cancelled"].includes(p.status));
+                  if (incoming.length === 0) return <div style={{ color: textSoft }}>No incoming shipments.</div>;
+                  return (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+                        <thead>
+                          <tr>{["Product", "Source", "Qty Ordered", "Qty Received", "Landed/Unit", "Purchase Date", "Expected Arrival", "Usable Date", "Delay", "Status", "Actions"].map((h) => (
+                            <th key={h} style={{ textAlign: "left", padding: "12px 10px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody>
+                          {incoming.map((pur, idx) => {
+                            const prod = products.find((p) => p.id === pur.product_id);
+                            const isDelayed = pur.expected_arrival_date && pur.expected_arrival_date < today && pur.status !== "arrived";
+                            return (
+                              <tr key={pur.id} style={{ background: idx % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{prod?.name || pur.product_id}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.source_country || "—"}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.quantity_ordered}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.quantity_received || 0}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{formatUSD(pur.landed_cost_per_unit_usd)}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.purchase_date || "—"}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.expected_arrival_date || "—"}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.usable_stock_date || "—"}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{isDelayed ? <span style={getDecisionStyle("KILL")}>Delayed</span> : <span style={getDecisionStyle("OK")}>On time</span>}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}><span style={getDecisionStyle(pur.status)}>{pur.status}</span></td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, whiteSpace: "nowrap" }}>
+                                  <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+                                    {pur.status !== "arrived" ? <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => updatePurchaseStatus(pur.id, "arrived", pur.quantity_received)}>Mark Arrived</button> : null}
+                                    <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => { const qty = window.prompt(`Qty received for ${prod?.name || pur.product_id}:`, String(pur.quantity_ordered)); if (qty != null) updatePurchaseStatus(pur.id, "received", qty); }}>Receive Qty</button>
+                                    <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => updatePurchaseStatus(pur.id, "delayed", pur.quantity_received)}>Mark Delayed</button>
+                                    <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca", padding: "5px 8px", fontSize: 11 }} onClick={() => updatePurchaseStatus(pur.id, "cancelled", 0)}>Cancel</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+              </div>
+              </div>
+              {/* end incoming tab */}
+
+              {/* ===== TAB: STOCK OVERVIEW ===== */}
+              <div style={{ display: stockTab === "overview" ? "grid" : "none", gap: 16 }}>
+              <div style={{ ...styles.card, padding: 22 }}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <div style={styles.sectionEyebrow}>Stock overview</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Real-time stock by product</div>
+                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Available = received stock − reserved − delivered + returned. Incoming = ordered / in-transit only.</div>
+                  </div>
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+                    <thead>
+                      <tr>{["Product", "Available", "Reserved", "Incoming", "Delivered", "Returned", "Stock Value USD", "Landed Cost/Unit", "Sales/Day", "Days to Stockout", "Reorder Status", "Status", "Actions"].map((h) => (
+                        <th key={h} style={{ textAlign: "left", padding: "12px 10px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", whiteSpace: "nowrap" }}>{h}</th>
+                      ))}</tr>
+                    </thead>
+                    <tbody>
+                      {stockForecastRows.map((row, idx) => {
+                        const minStock = Number(situationData?.productAlertThresholds?.minStockQuantity ?? 3);
+                        const statusLabel = row.availableStock <= 0 ? "Out of Stock" : row.availableStock <= minStock ? "Low Stock" : row.incomingStock > 0 && row.availableStock <= minStock * 2 ? "Incoming" : "OK";
+                        return (
+                          <tr key={row.id} style={{ background: idx % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{row.name}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800, color: row.availableStock <= 0 ? red : row.availableStock <= minStock ? amber : textMain }}>{row.availableStock}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.reservedStock}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.incomingStock || 0}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.deliveredStock || 0}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.returnedStock || 0}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{formatUSD(row.stockValueUsd)}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.unitProductCost > 0 ? formatUSD(row.unitProductCost) : "—"}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.salesPerDay.toFixed(1)}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.daysUntilStockout != null ? `${Math.max(1, Math.round(row.daysUntilStockout))}d` : "—"}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}><span style={getDecisionStyle(row.reorderStatus)}>{row.reorderStatus}</span></td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}><span style={getDecisionStyle(statusLabel)}>{statusLabel}</span></td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, whiteSpace: "nowrap" }}>
+                              <div style={{ display: "inline-flex", gap: 6 }}>
+                                <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => { setStockTab("purchases"); setPurchaseForm((f) => ({ ...f, product_id: row.id })); }}>Restock</button>
+                                <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => setStockTab("movements")}>Movements</button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {stockForecastRows.length === 0 ? <tr><td colSpan={13} style={{ padding: 20, color: textSoft }}>No products yet.</td></tr> : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              </div>
+              {/* end overview tab */}
+
+              {/* ===== TAB: STOCK MOVEMENTS ===== */}
+              <div style={{ display: stockTab === "movements" ? "grid" : "none", gap: 16 }}>
+              <div style={{ ...styles.card, padding: 22 }}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <div style={styles.sectionEyebrow}>Stock movements</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Movement log</div>
+                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Every stock change is recorded here. Manual adjustments require a reason.</div>
+                  </div>
+                </div>
+                <div style={{ ...styles.softStat, marginBottom: 20, padding: 16 }}>
+                  <div style={{ fontWeight: 800, marginBottom: 12 }}>Manual stock adjustment</div>
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr 1fr 1fr auto", "1fr 1fr", "1fr"), gap: 12, alignItems: "end" }}>
+                    <div style={styles.fieldBlock}>
+                      <label style={styles.fieldLabel}>Product</label>
+                      <select style={styles.input} value={manualAdjForm.product_id} onChange={(e) => setManualAdjForm((f) => ({ ...f, product_id: e.target.value }))}>
+                        <option value="">— Select product —</option>
+                        {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    </div>
+                    <div style={styles.fieldBlock}>
+                      <label style={styles.fieldLabel}>Qty change (+/-)</label>
+                      <input style={styles.input} type="number" value={manualAdjForm.quantity_change} onChange={(e) => setManualAdjForm((f) => ({ ...f, quantity_change: e.target.value }))} placeholder="e.g. -5 or +10" />
+                    </div>
+                    <div style={styles.fieldBlock}>
+                      <label style={styles.fieldLabel}>Reason</label>
+                      <select style={styles.input} value={manualAdjForm.reason} onChange={(e) => setManualAdjForm((f) => ({ ...f, reason: e.target.value }))}>
+                        <option value="stock_count_correction">Stock count correction</option>
+                        <option value="damaged_item">Damaged item</option>
+                        <option value="lost_item">Lost item</option>
+                        <option value="warehouse_correction">Warehouse correction</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </div>
+                    <div style={styles.fieldBlock}>
+                      <label style={styles.fieldLabel}>Note</label>
+                      <input style={styles.input} value={manualAdjForm.note} onChange={(e) => setManualAdjForm((f) => ({ ...f, note: e.target.value }))} placeholder="Required note" />
+                    </div>
+                    <button style={styles.btnPrimary} onClick={saveManualAdjustment}>Apply</button>
+                  </div>
+                </div>
+                {stockMovements.length === 0 ? (
+                  <div style={{ color: textSoft }}>No movements recorded yet.</div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+                      <thead>
+                        <tr>{["Date", "Product", "Type", "Qty Change", "Reference", "Note"].map((h) => (
+                          <th key={h} style={{ textAlign: "left", padding: "12px 10px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", whiteSpace: "nowrap" }}>{h}</th>
+                        ))}</tr>
+                      </thead>
+                      <tbody>
+                        {[...stockMovements].reverse().map((mov, idx) => {
+                          const prod = products.find((p) => p.id === mov.product_id);
+                          return (
+                            <tr key={mov.movement_id} style={{ background: idx % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{mov.date}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{prod?.name || mov.product_id}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}><span style={{ ...styles.badge, background: "rgba(29,95,208,0.08)", color: accent }}>{mov.type?.replace(/_/g, " ")}</span></td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700, color: Number(mov.quantity_change) >= 0 ? green : red }}>{Number(mov.quantity_change) >= 0 ? `+${mov.quantity_change}` : mov.quantity_change}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontSize: 12, color: textSoft }}>{mov.source_reference || "—"}</td>
+                              <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontSize: 13 }}>{mov.note || "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+              </div>
+              {/* end movements tab */}
+
+              {/* ===== TAB: STOCK ALERTS ===== */}
+              <div style={{ display: stockTab === "alerts" ? "grid" : "none", gap: 16 }}>
+              <div style={{ ...styles.card, padding: 22 }}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <div style={styles.sectionEyebrow}>Stock alerts</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Active stock issues</div>
+                  </div>
+                </div>
+                {stockAlerts.length === 0 ? (
+                  <div style={{ color: textSoft, padding: "16px 0" }}>No stock alerts. Everything looks good.</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {stockAlerts.map((alert, idx) => (
+                      <div key={idx} style={{ padding: "14px 18px", borderRadius: 16, border: `1px solid ${alert.severity === "critical" ? "#fecaca" : alert.severity === "warning" ? "rgba(199,131,34,0.25)" : cardBorder}`, background: alert.severity === "critical" ? "#fef2f2" : alert.severity === "warning" ? "rgba(199,131,34,0.06)" : "rgba(255,255,255,0.85)", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                        <div>
+                          <div style={{ fontWeight: 800, color: alert.severity === "critical" ? red : alert.severity === "warning" ? amber : textSoft }}>{alert.productName}</div>
+                          <div style={{ fontSize: 13, color: textMain, marginTop: 4 }}>{alert.message}</div>
+                        </div>
+                        <span style={{ ...styles.badge, background: alert.severity === "critical" ? "rgba(220,38,38,0.1)" : "rgba(199,131,34,0.1)", color: alert.severity === "critical" ? red : amber }}>{alert.type?.replace(/_/g, " ")}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              </div>
+              {/* end alerts tab */}
+
+              {/* ===== TAB: STOCK AUDIT ===== */}
+              <div style={{ display: stockTab === "audit" ? "grid" : "none", gap: 16 }}>
+              <div style={{ ...styles.card, padding: 22 }}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <div style={styles.sectionEyebrow}>Stock audit</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Full inventory audit</div>
+                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Cross-check all stock figures. Identify missing costs, negative stock and inconsistencies.</div>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 12, marginBottom: 20 }}>
+                  <MiniStat label="Products" value={stockAuditData.totalProducts} tone="blue" />
+                  <MiniStat label="Total available" value={stockAuditData.totalAvailable} tone="green" />
+                  <MiniStat label="Total reserved" value={stockAuditData.totalReserved} tone="amber" />
+                  <MiniStat label="Total incoming" value={stockAuditData.totalIncoming} tone="blue" />
+                  <MiniStat label="Total delivered" value={stockAuditData.totalDelivered} tone="green" />
+                  <MiniStat label="Total returned" value={stockAuditData.totalReturned} tone="amber" />
+                  <MiniStat label="Stock value USD" value={formatUSD(stockAuditData.totalStockValueUsd)} tone="green" />
+                  <MiniStat label="Missing cost" value={stockAuditData.missingCostCount} tone={stockAuditData.missingCostCount > 0 ? "amber" : "green"} sub={stockAuditData.missingCostCount > 0 ? "products need cost" : "all OK"} />
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+                    <thead>
+                      <tr>{["Product", "Available", "Reserved", "Incoming", "Delivered", "Returned", "Manual Adj.", "Landed Cost/Unit", "Stock Value USD"].map((h) => (
+                        <th key={h} style={{ textAlign: "left", padding: "12px 10px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", whiteSpace: "nowrap" }}>{h}</th>
+                      ))}</tr>
+                    </thead>
+                    <tbody>
+                      {stockAuditData.perProduct.map((row, idx) => (
+                        <tr key={row.id} style={{ background: idx % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{row.name}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800, color: row.available < 0 ? red : textMain }}>{row.available}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.reserved}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.incoming}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.delivered}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.returned}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: row.manualAdjustments !== 0 ? amber : textSoft }}>{row.manualAdjustments !== 0 ? `${row.manualAdjustments > 0 ? "+" : ""}${row.manualAdjustments}` : "—"}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: row.landedCostUsd <= 0 ? red : textMain }}>{row.landedCostUsd > 0 ? formatUSD(row.landedCostUsd) : "Missing"}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{formatUSD(row.stockValueUsd)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              </div>
+              {/* end audit tab */}
+
             </div>
           )}
+
+{activePage === "stock" && (() => { setActivePage("products"); setStockTab("overview"); return null; })()}
 
 {activePage === "customersOrders" && (
             <div style={{ display: "grid", gap: 20 }}>
