@@ -965,6 +965,7 @@ export default function App() {
   const [adInputDrafts, setAdInputDrafts] = useState({});
   const [expeditionForm, setExpeditionForm] = useState(getEmptyExpeditionForm);
   const [editingProductId, setEditingProductId] = useState(null);
+  const [showAddProductForm, setShowAddProductForm] = useState(false);
   const [customerForm, setCustomerForm] = useState(getEmptyCustomerForm(initialProducts[0]?.id || "P001"));
   const [overviewFilters, setOverviewFilters] = useState({
     productId: "all",
@@ -4255,6 +4256,7 @@ export default function App() {
 
     setEditingProductId(null);
     setExpeditionForm(getEmptyExpeditionForm());
+    setShowAddProductForm(false);
     setActivePage("products");
   };
 
@@ -4282,6 +4284,7 @@ export default function App() {
 
   const cancelEditingProduct = () => {
     setEditingProductId(null);
+    setShowAddProductForm(false);
     setExpeditionForm(getEmptyExpeditionForm());
   };
 
@@ -7966,7 +7969,7 @@ export default function App() {
                         Clear all products
                       </button>
                     )}
-                    <button style={styles.btnPrimary} onClick={() => setStockTab("purchases")}>
+                    <button style={styles.btnPrimary} onClick={() => { setStockTab("catalog"); setShowAddProductForm(true); setEditingProductId(null); setExpeditionForm(getEmptyExpeditionForm()); }}>
                       New product
                     </button>
                   </>
@@ -8005,9 +8008,68 @@ export default function App() {
                     {editingProductId ? (
                       <button style={styles.btnSecondary} onClick={cancelEditingProduct}>Cancel Edit</button>
                     ) : null}
-                    <button style={styles.btnPrimary} onClick={() => setStockTab("purchases")}>Add Product</button>
+                    <button style={styles.btnPrimary} onClick={() => { setShowAddProductForm(true); setEditingProductId(null); setExpeditionForm(getEmptyExpeditionForm()); }}>Add Product</button>
                   </div>
                 </div>
+
+                {showAddProductForm && !editingProductId ? (
+                  <div style={{ ...styles.softStat, marginBottom: 18 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: textSoft }}>Add new product</div>
+                        <div style={{ marginTop: 8, fontSize: 22, fontWeight: 900 }}>New product</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 10 }}>
+                        <button style={styles.btnSecondary} onClick={cancelEditingProduct}>Cancel</button>
+                        <button style={styles.btnPrimary} onClick={saveExpeditionProduct}>Save Product</button>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(2, minmax(0, 1fr))", "1fr", "1fr"), gap: 16 }}>
+                      <div style={styles.fieldBlock}>
+                        <label style={styles.fieldLabel}>Product Name</label>
+                        <input style={styles.input} placeholder="Ex: Electric Callus Remover" value={expeditionForm.name} onChange={(e) => { const name = e.target.value; setExpeditionForm((prev) => ({ ...prev, name, mappingCode: generateMappingCode(name, products, undefined) })); }} />
+                      </div>
+                      <div style={styles.fieldBlock}>
+                        <label style={styles.fieldLabel}>Mapping Code</label>
+                        <input style={styles.input} placeholder="Auto-generated" value={expeditionForm.mappingCode || ""} onChange={(e) => setExpeditionForm((prev) => ({ ...prev, mappingCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") }))} />
+                        <div style={{ fontSize: 11, color: textSoft, marginTop: 5 }}>Auto-generated · uppercase + numbers only · editable</div>
+                      </div>
+                      <div style={styles.fieldBlock}>
+                        <label style={styles.fieldLabel}>Source</label>
+                        <select style={styles.input} value={expeditionForm.source} onChange={(e) => setExpeditionForm({ ...expeditionForm, source: e.target.value })}>
+                          <option value="china">China</option>
+                          <option value="dubai">Dubai</option>
+                        </select>
+                      </div>
+                      <div style={styles.fieldBlock}>
+                        <label style={styles.fieldLabel}>Selling Price (TZS)</label>
+                        <input style={styles.input} type="number" placeholder="Ex: 39000" value={expeditionForm.sellingPrice} onChange={(e) => setExpeditionForm({ ...expeditionForm, sellingPrice: e.target.value })} />
+                      </div>
+                      <div style={styles.fieldBlock}>
+                        <label style={styles.fieldLabel}>Purchase Unit Price (USD)</label>
+                        <input style={styles.input} type="number" placeholder="Ex: 5" value={expeditionForm.purchaseUnitPrice} onChange={(e) => setExpeditionForm({ ...expeditionForm, purchaseUnitPrice: e.target.value })} />
+                      </div>
+                      <div style={styles.fieldBlock}>
+                        <label style={styles.fieldLabel}>Total Quantity</label>
+                        <input style={styles.input} type="number" placeholder="Ex: 100" value={expeditionForm.totalQty} onChange={(e) => setExpeditionForm({ ...expeditionForm, totalQty: e.target.value })} />
+                      </div>
+                      <div style={styles.fieldBlock}>
+                        <label style={styles.fieldLabel}>Supplier Name</label>
+                        <input style={styles.input} placeholder="Supplier or agent" value={expeditionForm.supplierName || ""} onChange={(e) => setExpeditionForm({ ...expeditionForm, supplierName: e.target.value })} />
+                      </div>
+                      <div style={styles.fieldBlock}>
+                        <label style={styles.fieldLabel}>Lifecycle</label>
+                        <select style={styles.input} value={expeditionForm.lifecycleStatus || "test"} onChange={(e) => setExpeditionForm({ ...expeditionForm, lifecycleStatus: e.target.value })}>
+                          <option value="test">Test</option>
+                          <option value="winner">Winner</option>
+                          <option value="scaling">Scaling</option>
+                          <option value="mature">Mature</option>
+                          <option value="discontinued">Discontinued</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 {editingProductId ? (
                   <div style={{ ...styles.softStat, marginBottom: 18 }}>
