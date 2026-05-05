@@ -35,7 +35,7 @@ function getReceivedStockUnits(productId, stockPurchases = []) {
 
   return relevant.reduce((sum, purchase) => {
     const status = String(purchase?.status || purchase?.stockArrivalStatus || "").trim().toLowerCase();
-    if (!["arrived", "received"].includes(status)) return sum;
+    if (!["arrived", "received", "partially_received"].includes(status)) return sum;
     return sum + Math.max(0, toNumber(purchase.quantity_received ?? purchase.quantityReceived ?? purchase.totalQty));
   }, 0);
 }

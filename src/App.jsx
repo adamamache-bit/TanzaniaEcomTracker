@@ -1130,6 +1130,7 @@ export default function App() {
   });
   const [editingPurchaseId, setEditingPurchaseId] = useState(null);
   const [manualAdjForm, setManualAdjForm] = useState({ product_id: "", quantity_change: "", reason: "stock_count_correction", note: "" });
+  const [receiveStockInput, setReceiveStockInput] = useState({ purchaseId: null, qty: "", notes: "" });
 
   const [products, setProducts] = useState(() => {
     if (supabaseEnabled) return Array.isArray(initialBrowserSnapshot?.products) ? initialBrowserSnapshot.products.map(sanitizeProductRecord) : [];
@@ -2178,6 +2179,48 @@ export default function App() {
           source_reference: purchaseId,
           note: `Purchase marked as ${newStatus}${quantityReceived != null ? ` (qty: ${qty})` : ""}`,
         };
+        const nextMov = addStockMovement(movement, prevMov);
+        void persistStockSnapshot(next, nextMov);
+        return nextMov;
+      });
+      return next;
+    });
+  }, [addStockMovement, persistStockSnapshot]);
+
+  const markArrivedEarly = useCallback((purchaseId) => {
+    setStockPurchases((prev) => {
+      const purchase = prev.find((p) => p.id === purchaseId);
+      if (!purchase) return prev;
+      const today = getTodayString();
+      const updated = { ...purchase, status: "arrived", actual_arrival_date: today, is_early_arrival: true, updated_at: new Date().toISOString() };
+      const next = prev.map((p) => p.id === purchaseId ? updated : p);
+      setStockMovements((prevMov) => {
+        const movement = { product_id: purchase.product_id, type: "early_arrival", quantity_change: 0, before_quantity: 0, after_quantity: 0, source_reference: purchaseId, note: `Arrived early on ${today}` };
+        const nextMov = addStockMovement(movement, prevMov);
+        void persistStockSnapshot(next, nextMov);
+        return nextMov;
+      });
+      return next;
+    });
+  }, [addStockMovement, persistStockSnapshot]);
+
+  const receiveStockNow = useCallback((purchaseId, qtyJustReceived, receivingNotes) => {
+    setStockPurchases((prev) => {
+      const purchase = prev.find((p) => p.id === purchaseId);
+      if (!purchase) return prev;
+      const alreadyReceived = Math.max(0, Number(purchase.quantity_received) || 0);
+      const ordered = Math.max(0, Number(purchase.quantity_ordered) || 0);
+      const remaining = ordered - alreadyReceived;
+      const qty = Math.max(0, Number(qtyJustReceived) || 0);
+      if (qty <= 0 || qty > remaining) return prev;
+      const newQtyReceived = alreadyReceived + qty;
+      const newRemaining = ordered - newQtyReceived;
+      const today = getTodayString();
+      const newStatus = newRemaining === 0 ? "received" : "partially_received";
+      const updated = { ...purchase, status: newStatus, quantity_received: newQtyReceived, remaining_quantity: newRemaining, received_date: today, receiving_notes: receivingNotes || purchase.receiving_notes || "", updated_at: new Date().toISOString() };
+      const next = prev.map((p) => p.id === purchaseId ? updated : p);
+      setStockMovements((prevMov) => {
+        const movement = { product_id: purchase.product_id, type: "purchase_received", quantity_change: qty, before_quantity: alreadyReceived, after_quantity: newQtyReceived, source_reference: purchaseId, note: receivingNotes || `Received ${qty} units (${newStatus})` };
         const nextMov = addStockMovement(movement, prevMov);
         void persistStockSnapshot(next, nextMov);
         return nextMov;
@@ -8549,38 +8592,85 @@ export default function App() {
                 {(() => {
                   const today = getTodayString();
                   const incoming = stockPurchases.filter((p) => !["received", "cancelled"].includes(p.status));
-                  if (incoming.length === 0) return <div style={{ color: textSoft }}>No incoming shipments.</div>;
+                  if (incoming.length === 0) return <div style={{ color: textSoft, padding: "20px 0" }}>No incoming shipments.</div>;
                   return (
                     <div style={{ overflowX: "auto" }}>
                       <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
                         <thead>
-                          <tr>{["Product", "Source", "Qty Ordered", "Qty Received", "Landed/Unit", "Purchase Date", "Expected Arrival", "Usable Date", "Delay", "Status", "Actions"].map((h) => (
+                          <tr>{["Product", "Source", "Ordered", "Received", "Remaining", "Landed/Unit", "Expected Arrival", "Actual Arrival", "Received Date", "Delay", "Status", "Actions"].map((h) => (
                             <th key={h} style={{ textAlign: "left", padding: "12px 10px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", whiteSpace: "nowrap" }}>{h}</th>
                           ))}</tr>
                         </thead>
                         <tbody>
                           {incoming.map((pur, idx) => {
                             const prod = products.find((p) => p.id === pur.product_id);
-                            const isDelayed = pur.expected_arrival_date && pur.expected_arrival_date < today && pur.status !== "arrived";
+                            const qtyReceived = Math.max(0, Number(pur.quantity_received) || 0);
+                            const qtyOrdered = Math.max(0, Number(pur.quantity_ordered) || 0);
+                            const remaining = qtyOrdered - qtyReceived;
+                            const isDelayed = pur.expected_arrival_date && pur.expected_arrival_date < today && !["arrived", "partially_received"].includes(pur.status);
+                            const isReceiving = receiveStockInput.purchaseId === pur.id;
                             return (
                               <tr key={pur.id} style={{ background: idx % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
                                 <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{prod?.name || pur.product_id}</td>
                                 <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.source_country || "—"}</td>
-                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.quantity_ordered}</td>
-                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.quantity_received || 0}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{qtyOrdered}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{qtyReceived}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700, color: remaining <= 0 ? textSoft : textMain }}>{remaining}</td>
                                 <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{formatUSD(pur.landed_cost_per_unit_usd)}</td>
-                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.purchase_date || "—"}</td>
                                 <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.expected_arrival_date || "—"}</td>
-                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.usable_stock_date || "—"}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.actual_arrival_date ? <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{pur.actual_arrival_date}{pur.is_early_arrival ? <span style={{ fontSize: 10, background: "#d1fae5", color: "#065f46", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>EARLY</span> : null}</span> : "—"}</td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{pur.received_date || "—"}</td>
                                 <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{isDelayed ? <span style={getDecisionStyle("KILL")}>Delayed</span> : <span style={getDecisionStyle("OK")}>On time</span>}</td>
-                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}><span style={getDecisionStyle(pur.status)}>{pur.status}</span></td>
-                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, whiteSpace: "nowrap" }}>
-                                  <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-                                    {pur.status !== "arrived" ? <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => updatePurchaseStatus(pur.id, "arrived", pur.quantity_received)}>Mark Arrived</button> : null}
-                                    <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => { const qty = window.prompt(`Qty received for ${prod?.name || pur.product_id}:`, String(pur.quantity_ordered)); if (qty != null) updatePurchaseStatus(pur.id, "received", qty); }}>Receive Qty</button>
-                                    <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => updatePurchaseStatus(pur.id, "delayed", pur.quantity_received)}>Mark Delayed</button>
-                                    <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca", padding: "5px 8px", fontSize: 11 }} onClick={() => updatePurchaseStatus(pur.id, "cancelled", 0)}>Cancel</button>
-                                  </div>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>
+                                  <span style={getDecisionStyle(pur.status)}>{pur.status.replace(/_/g, " ")}</span>
+                                </td>
+                                <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, minWidth: 240 }}>
+                                  {isReceiving ? (
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                      <div style={{ fontSize: 11, color: textSoft }}>Remaining: <strong>{remaining}</strong></div>
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        max={remaining}
+                                        placeholder={`Qty (max ${remaining})`}
+                                        value={receiveStockInput.qty}
+                                        onChange={(e) => setReceiveStockInput((s) => ({ ...s, qty: e.target.value }))}
+                                        style={{ ...styles.input, width: 90, padding: "4px 8px", fontSize: 12 }}
+                                      />
+                                      <input
+                                        type="text"
+                                        placeholder="Notes (optional)"
+                                        value={receiveStockInput.notes}
+                                        onChange={(e) => setReceiveStockInput((s) => ({ ...s, notes: e.target.value }))}
+                                        style={{ ...styles.input, padding: "4px 8px", fontSize: 12 }}
+                                      />
+                                      {(() => {
+                                        const enteredQty = Number(receiveStockInput.qty) || 0;
+                                        const overReceive = enteredQty > remaining;
+                                        return overReceive ? <div style={{ fontSize: 11, color: red, fontWeight: 700 }}>Cannot receive more than remaining quantity ({remaining})</div> : null;
+                                      })()}
+                                      <div style={{ display: "flex", gap: 6 }}>
+                                        <button style={{ ...styles.btnPrimary, padding: "4px 10px", fontSize: 11 }} onClick={() => {
+                                          const enteredQty = Number(receiveStockInput.qty) || 0;
+                                          if (enteredQty <= 0 || enteredQty > remaining) return;
+                                          receiveStockNow(pur.id, enteredQty, receiveStockInput.notes);
+                                          setReceiveStockInput({ purchaseId: null, qty: "", notes: "" });
+                                        }}>Confirm</button>
+                                        <button style={{ ...styles.btnSecondary, padding: "4px 10px", fontSize: 11 }} onClick={() => setReceiveStockInput({ purchaseId: null, qty: "", notes: "" })}>Cancel</button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+                                      {!["arrived", "partially_received"].includes(pur.status) ? (
+                                        <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11, background: "#d1fae5", color: "#065f46", border: "1px solid #6ee7b7" }} onClick={() => markArrivedEarly(pur.id)}>Arrived Early</button>
+                                      ) : null}
+                                      {remaining > 0 ? (
+                                        <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => setReceiveStockInput({ purchaseId: pur.id, qty: String(remaining), notes: "" })}>Receive Stock</button>
+                                      ) : null}
+                                      <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => updatePurchaseStatus(pur.id, "delayed", pur.quantity_received)}>Mark Delayed</button>
+                                      <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca", padding: "5px 8px", fontSize: 11 }} onClick={() => updatePurchaseStatus(pur.id, "cancelled", 0)}>Cancel</button>
+                                    </div>
+                                  )}
                                 </td>
                               </tr>
                             );
