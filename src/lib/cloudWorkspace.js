@@ -331,6 +331,26 @@ export async function saveCloudWorkspace(state, { workspaceId = supabaseWorkspac
   };
 }
 
+export async function saveCloudWorkspaceAnon(state, { workspaceId = supabaseWorkspaceId } = {}) {
+  if (!supabaseEnabled || !supabase) throw new Error("Supabase is not configured.");
+  const nextVersion = Math.max(Date.now(), 1);
+  const payload = { name: "Main Workspace", version: nextVersion, updated_at: new Date().toISOString(), updated_by: null, state };
+
+  const updateAttempt = await supabase.from("workspaces").update(payload).eq("id", workspaceId).select("id,version,updated_at").maybeSingle();
+  let data = updateAttempt.data || null;
+  let error = updateAttempt.error || null;
+
+  if (!data && !error) {
+    const insertAttempt = await supabase.from("workspaces").insert({ id: workspaceId, ...payload }).select("id,version,updated_at").single();
+    data = insertAttempt.data || null;
+    error = insertAttempt.error || null;
+  }
+
+  if (error) throw error;
+  if (!data) throw new Error("Cloud workspace save returned no row.");
+  return { id: data.id, version: Number(data.version || 0), updatedAt: data.updated_at || null };
+}
+
 export function subscribeToCloudWorkspace(workspaceId = supabaseWorkspaceId, onChange) {
   if (!supabaseEnabled || !supabase) return () => {};
 

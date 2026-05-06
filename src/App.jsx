@@ -45,6 +45,7 @@ import {
   onCloudAuthStateChange,
   restoreCloudWorkspaceBackup,
   saveCloudWorkspace,
+  saveCloudWorkspaceAnon,
   signInCloud,
   signOutCloud,
   signUpCloud,
@@ -231,6 +232,8 @@ function buildBrowserPersistedSnapshot(source = {}, { slim = false } = {}) {
       lastOrdersImportAt: source.importMeta?.lastOrdersImportAt || null,
       lastShippingImportAt: source.importMeta?.lastShippingImportAt || null,
     },
+    stockPurchases: Array.isArray(source.stockPurchases) ? source.stockPurchases : [],
+    stockMovements: slim ? [] : Array.isArray(source.stockMovements) ? source.stockMovements : [],
   };
 }
 
@@ -1428,6 +1431,24 @@ export default function App() {
             }
           }
 
+          // Merge locally-saved products not yet in remote (race condition: user adds product before workspace loads)
+          if (browserBackupSnapshot?.products?.length > 0) {
+            const resolvedProductIds = new Set((resolvedState.products || []).map((p) => p.id));
+            const localOnlyProducts = browserBackupSnapshot.products.filter((p) => p.id && !resolvedProductIds.has(p.id));
+            if (localOnlyProducts.length > 0) {
+              resolvedState = { ...resolvedState, products: [...(resolvedState.products || []), ...localOnlyProducts] };
+              lastSharedPayloadRef.current = "";
+            }
+          }
+          if (browserBackupSnapshot?.stockPurchases?.length > 0) {
+            const resolvedPurchaseIds = new Set((resolvedState.stockPurchases || []).map((p) => p.id));
+            const localOnlyPurchases = browserBackupSnapshot.stockPurchases.filter((p) => p.id && !resolvedPurchaseIds.has(p.id));
+            if (localOnlyPurchases.length > 0) {
+              resolvedState = { ...resolvedState, stockPurchases: [...(resolvedState.stockPurchases || []), ...localOnlyPurchases] };
+              lastSharedPayloadRef.current = "";
+            }
+          }
+
           applySharedStateSnapshot(resolvedState);
           sharedVersionRef.current = Number(payload.version || 0);
           setSharedWorkspace({
@@ -1549,6 +1570,8 @@ export default function App() {
       situationData,
       metaAdsState,
       importMeta,
+      stockPurchases,
+      stockMovements,
     };
     const nextSnapshotHasData = hasMeaningfulWorkspaceData(nextSnapshot);
     const existingBrowserBackup = readLocalWorkspaceSnapshotFromStorage();
@@ -1560,7 +1583,7 @@ export default function App() {
       exportedAt: new Date().toISOString(),
       onSaved: (now) => setLastAutoBackupAt(now),
     });
-  }, [customers, importMeta, metaAdsState, products, readBrowserBackupSnapshot, serviceForm, situationData, tracking]);
+  }, [customers, importMeta, metaAdsState, products, readBrowserBackupSnapshot, serviceForm, situationData, tracking, stockPurchases, stockMovements]);
 
   useEffect(() => {
     const bucket = getDayBucket(currentTime);
@@ -1623,7 +1646,6 @@ export default function App() {
       } = {}
     ) {
       if (!sharedWorkspace.initialized) return true;
-      if (supabaseEnabled && !cloudAuth.user) return false;
 
       const serialized = JSON.stringify(nextSnapshot || {});
       if (serialized === lastSharedPayloadRef.current) return true;
@@ -1656,6 +1678,9 @@ export default function App() {
             userId: cloudAuth.user.id,
           });
           payload = { ok: true, version: saved.version, updatedAt: saved.updatedAt, backup: saved.backup || null };
+        } else if (supabaseEnabled) {
+          const saved = await saveCloudWorkspaceAnon(nextSnapshot, { workspaceId: supabaseWorkspaceId });
+          payload = { ok: true, version: saved.version, updatedAt: saved.updatedAt, backup: null };
         } else {
           const response = await fetch(getSharedApiBase(), {
             method: "POST",
@@ -1743,7 +1768,6 @@ export default function App() {
   useEffect(() => {
     if (!sharedWorkspace.initialized) return;
     if (sharedHydratingRef.current) return;
-    if (supabaseEnabled && !cloudAuth.user) return;
 
     const snapshot = buildSharedStateSnapshot();
     latestSharedStateRef.current = snapshot;
@@ -4252,7 +4276,15 @@ export default function App() {
       ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
       products: nextProducts.map(sanitizeProductRecord),
     };
-    await persistProductsSnapshot(nextProducts, editingProductId ? "Cloud product updated" : "Cloud product added");
+    const saveOk = await persistProductsSnapshot(nextProducts, editingProductId ? "Cloud product updated" : "Cloud product added");
+    if (!saveOk) {
+      setSharedWorkspace((prev) => ({
+        ...prev,
+        notice: supabaseEnabled
+          ? "Cloud sync failed — product saved locally. Sign in or check your connection and try again."
+          : "Save failed — product kept in memory only.",
+      }));
+    }
 
     setEditingProductId(null);
     setExpeditionForm(getEmptyExpeditionForm());
