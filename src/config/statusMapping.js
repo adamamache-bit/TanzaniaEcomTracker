@@ -82,10 +82,8 @@ const RETURNED_STATUSES = new Set([
   "failed delivery",
   "undelivered",
   "not delivered",
-  "canceled",
   "cancelled after shipping",
   "damaged",
-  "no reply",
   "reported",
 ]);
 

@@ -2677,7 +2677,10 @@ export default function App() {
         const margin = productPerformance.profitMargin;
         const initialStock = Number(product.totalQty || 0);
         const realPurchasesForProduct = stockPurchases.filter((p) => p.product_id === product.id);
-        const productStockPurchases = realPurchasesForProduct.length > 0 ? realPurchasesForProduct : [{
+        // Synthetic purchase is used ONLY for cost/value estimation when no formal purchases exist.
+        // Stock quantity calculations always use realPurchasesForProduct so that
+        // available=0 when no purchases are recorded (prevents phantom stock).
+        const productStockPurchasesForCost = realPurchasesForProduct.length > 0 ? realPurchasesForProduct : [{
           product_id: product.id,
           quantity_received: product.totalQty,
           quantity_ordered: product.totalQty,
@@ -2691,10 +2694,10 @@ export default function App() {
         const reservedStock = calculateReservedStock(product.id, productOrders);
         const deliveredStock = calculateDeliveredStock(product.id, productOrders);
         const returnedStock = calculateReturnedStock(product.id, productOrders);
-        const availableStock = calculateAvailableStock(product.id, productStockPurchases, productOrders);
+        const availableStock = calculateAvailableStock(product.id, realPurchasesForProduct, productOrders);
         const currentStock = Math.max(0, availableStock + reservedStock);
-        const stockValue = calculateAvailableStockValue(product.id, productStockPurchases, productOrders, USD_TO_TZS);
-        const incomingStock = productStockPurchases.filter((p) => ["ordered", "in_transit"].includes(p.status)).reduce((s, p) => s + Math.max(0, Number(p.quantity_ordered || 0) - Number(p.quantity_received || 0)), 0);
+        const stockValue = calculateAvailableStockValue(product.id, productStockPurchasesForCost, productOrders, USD_TO_TZS);
+        const incomingStock = realPurchasesForProduct.filter((p) => ["ordered", "in_transit"].includes(p.status)).reduce((s, p) => s + Math.max(0, Number(p.quantity_ordered || 0) - Number(p.quantity_received || 0)), 0);
         const salesPerDay = deliveredUnits > 0 ? deliveredUnits / 30 : 0;
         const arrivalDays = Number(product.estimatedArrivalDays || 0);
         const safetyFactor = 1.3;

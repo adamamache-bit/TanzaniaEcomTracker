@@ -74,10 +74,12 @@ export function calculateReturnedStock(productId, orders = []) {
 
 export function calculateAvailableStock(productId, stockPurchases = [], orders = []) {
   const receivedUnits = getReceivedStockUnits(productId, stockPurchases);
+  if (receivedUnits <= 0) return 0;
   const deliveredUnits = calculateDeliveredStock(productId, orders);
   const reservedUnits = calculateReservedStock(productId, orders);
-  const returnedUnits = calculateReturnedStock(productId, orders);
-  return Math.max(0, receivedUnits - deliveredUnits - reservedUnits + returnedUnits);
+  const returnedUnits = Math.min(calculateReturnedStock(productId, orders), receivedUnits);
+  const available = receivedUnits - deliveredUnits - reservedUnits + returnedUnits;
+  return Math.max(0, Math.min(available, receivedUnits));
 }
 
 export function calculateAvailableStockValue(productId, stockPurchases = [], orders = [], exchangeRate = DEFAULT_EXCHANGE_RATE) {
