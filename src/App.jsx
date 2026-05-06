@@ -2495,6 +2495,18 @@ export default function App() {
     return mergedCustomers;
   }, [buildOperationalCustomerKeys, compareOperationalCustomers, customers]);
 
+  const resolvedOperationalCustomers = useMemo(() => {
+    if (!products.length) return operationalCustomers;
+    return operationalCustomers.map((customer) => {
+      if (customer.productId) return customer;
+      const rawName = String(customer.product_name_raw || customer.product_ref || "").trim();
+      if (!rawName) return customer;
+      const resolvedId = matchProductIdFromText(rawName, products);
+      if (!resolvedId) return customer;
+      return { ...customer, productId: resolvedId };
+    });
+  }, [operationalCustomers, products]);
+
   const serviceLeadCustomers = useMemo(
     () =>
       operationalCustomers.filter((customer) =>
@@ -2593,11 +2605,11 @@ export default function App() {
   );
 
   const customerMetricsByProduct = useMemo(() => {
-    return buildCustomerMetricsByProduct(operationalCustomers);
-  }, [buildCustomerMetricsByProduct, operationalCustomers]);
+    return buildCustomerMetricsByProduct(resolvedOperationalCustomers);
+  }, [buildCustomerMetricsByProduct, resolvedOperationalCustomers]);
 
   const buildProductDashboardRows = useCallback(
-    (metricsByProduct = {}, trackingRows = []) =>
+    (metricsByProduct = {}, trackingRows = [], resolvedCustomers = []) =>
       products
         .map((product) => {
           const rows = trackingRows.filter((t) => t.productId === product.id);
@@ -2675,7 +2687,7 @@ export default function App() {
           sourcing_cost_usd: product.sourcingCostUsd,
           status: ["arrived", "received"].includes(String(product.stockArrivalStatus || "").toLowerCase()) ? "received" : "in_transit",
         }];
-        const productOrders = operationalCustomers.filter((customer) => customer.productId === product.id);
+        const productOrders = resolvedCustomers.filter((customer) => customer.productId === product.id);
         const reservedStock = calculateReservedStock(product.id, productOrders);
         const deliveredStock = calculateDeliveredStock(product.id, productOrders);
         const returnedStock = calculateReturnedStock(product.id, productOrders);
@@ -2780,12 +2792,12 @@ export default function App() {
           };
         })
         .sort((a, b) => b.score - a.score),
-    [operationalCustomers, products, stockPurchases]
+    [products, stockPurchases]
   );
 
   const productDashboard = useMemo(() => {
-    return buildProductDashboardRows(customerMetricsByProduct, tracking);
-  }, [buildProductDashboardRows, customerMetricsByProduct, tracking]);
+    return buildProductDashboardRows(customerMetricsByProduct, tracking, resolvedOperationalCustomers);
+  }, [buildProductDashboardRows, customerMetricsByProduct, tracking, resolvedOperationalCustomers]);
 
   const bestProduct = productDashboard[0];
   const productDashboardMap = useMemo(

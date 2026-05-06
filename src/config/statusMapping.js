@@ -106,6 +106,11 @@ const PENDING_SHIPPING_STATUSES = new Set([
   "chez livreur",
   "to prepare",
   "to prepare now",
+  "prepared",
+  "en preparation",
+  "pret",
+  "en cours",
+  "being prepared",
 ]);
 
 export function isBlankShippingStatus(status) {
