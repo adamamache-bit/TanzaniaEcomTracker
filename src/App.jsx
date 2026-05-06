@@ -137,7 +137,9 @@ import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
   calculateAvailableStockValue,
+  calculateDamagedStock,
   calculateDeliveredStock,
+  calculateReceivedStock,
   calculateReservedStock,
   calculateReturnedStock,
   calculateServiceFeeForOrder,
@@ -2691,11 +2693,13 @@ export default function App() {
           status: ["arrived", "received"].includes(String(product.stockArrivalStatus || "").toLowerCase()) ? "received" : "in_transit",
         }];
         const productOrders = resolvedCustomers.filter((customer) => customer.productId === product.id);
+        const acceptedStock = calculateReceivedStock(product.id, realPurchasesForProduct);
         const reservedStock = calculateReservedStock(product.id, productOrders);
         const deliveredStock = calculateDeliveredStock(product.id, productOrders);
         const returnedStock = calculateReturnedStock(product.id, productOrders);
+        const damagedStock = calculateDamagedStock(product.id, productOrders);
         const availableStock = calculateAvailableStock(product.id, realPurchasesForProduct, productOrders);
-        const currentStock = Math.max(0, availableStock + reservedStock);
+        const currentStock = Math.max(0, availableStock);
         const stockValue = calculateAvailableStockValue(product.id, productStockPurchasesForCost, productOrders, USD_TO_TZS);
         const incomingStock = realPurchasesForProduct.filter((p) => ["ordered", "in_transit"].includes(p.status)).reduce((s, p) => s + Math.max(0, Number(p.quantity_ordered || 0) - Number(p.quantity_received || 0)), 0);
         const salesPerDay = deliveredUnits > 0 ? deliveredUnits / 30 : 0;
@@ -2775,11 +2779,13 @@ export default function App() {
           decision,
           score,
           initialStock,
+          acceptedStock,
           currentStock,
           reservedStock,
           availableStock,
           deliveredStock,
           returnedStock,
+          damagedStock,
           stockValueUsd: stockValue.valueUsd,
           stockValueTsh: stockValue.valueTsh,
           salesPerDay,
@@ -5896,38 +5902,47 @@ export default function App() {
 
   const stockAuditData = useMemo(() => {
     const totalProducts = products.length;
-    let totalAvailable = 0, totalReserved = 0, totalIncoming = 0, totalDelivered = 0, totalReturned = 0;
+    let totalAccepted = 0, totalAvailable = 0, totalOutDelivered = 0, totalReserved = 0, totalIncoming = 0, totalDelivered = 0, totalReturned = 0, totalDamaged = 0;
     let missingCostCount = 0, negativeStockCount = 0;
     const perProduct = productDashboard.map((product) => {
+      const accepted = Number(product.acceptedStock || 0);
       const avail = Number(product.availableStock || 0);
+      const outDelivered = Number(product.reservedStock || 0);
       const reserved = Number(product.reservedStock || 0);
       const incoming = Number(product.incomingStock || 0);
       const delivered = Number(product.deliveredStock || 0);
       const returned = Number(product.returnedStock || 0);
+      const damaged = Number(product.damagedStock || 0);
       const cost = Number(product.unitProductCost || 0);
+      totalAccepted += accepted;
       totalAvailable += avail;
+      totalOutDelivered += outDelivered;
       totalReserved += reserved;
       totalIncoming += incoming;
       totalDelivered += delivered;
       totalReturned += returned;
+      totalDamaged += damaged;
       if (avail > 0 && cost <= 0) missingCostCount++;
       if (avail < 0) negativeStockCount++;
       const manualAdj = stockMovements.filter((m) => m.product_id === product.id && m.type === "manual_adjustment").reduce((s, m) => s + Number(m.quantity_change || 0), 0);
       return {
         id: product.id,
         name: product.name,
+        accepted,
         available: avail,
+        outDelivered,
         reserved,
         incoming,
         delivered,
         returned,
+        damaged,
         manualAdjustments: manualAdj,
         landedCostUsd: cost,
         stockValueUsd: Number(product.stockValueUsd || 0),
       };
     });
     const totalStockValueUsd = perProduct.reduce((s, r) => s + r.stockValueUsd, 0);
-    return { totalProducts, totalAvailable, totalReserved, totalIncoming, totalDelivered, totalReturned, missingCostCount, negativeStockCount, totalStockValueUsd, perProduct };
+    return { totalProducts, totalAccepted, totalAvailable, totalOutDelivered, totalReserved, totalIncoming, totalDelivered, totalReturned, totalDamaged, missingCostCount, negativeStockCount, totalStockValueUsd, perProduct };
   }, [productDashboard, stockMovements, products]);
 
   const taskCenterData = useMemo(() => {
@@ -8897,13 +8912,13 @@ export default function App() {
                   <div>
                     <div style={styles.sectionEyebrow}>Stock overview</div>
                     <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Real-time stock by product</div>
-                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>Available = received stock − reserved − delivered + returned. Incoming = ordered / in-transit only.</div>
+                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>In Stock = Accepted − Out Delivered − Delivered − Damaged. Incoming = ordered / in-transit only.</div>
                   </div>
                 </div>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
                     <thead>
-                      <tr>{["Product", "Available", "Reserved", "Incoming", "Delivered", "Returned", "Stock Value USD", "Landed Cost/Unit", "Sales/Day", "Days to Stockout", "Reorder Status", "Status", "Actions"].map((h) => (
+                      <tr>{["Product", "Accepted", "In Stock", "Out Delivered", "Delivered", "Damaged", "Incoming", "Stock Value USD", "Landed Cost/Unit", "Sales/Day", "Days to Stockout", "Reorder Status", "Actions"].map((h) => (
                         <th key={h} style={{ textAlign: "left", padding: "12px 10px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", whiteSpace: "nowrap" }}>{h}</th>
                       ))}</tr>
                     </thead>
@@ -8914,17 +8929,17 @@ export default function App() {
                         return (
                           <tr key={row.id} style={{ background: idx % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
                             <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{row.name}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.acceptedStock || 0}</td>
                             <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800, color: row.availableStock <= 0 ? red : row.availableStock <= minStock ? amber : textMain }}>{row.availableStock}</td>
-                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.reservedStock}</td>
-                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.incomingStock || 0}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.reservedStock || 0}</td>
                             <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.deliveredStock || 0}</td>
-                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.returnedStock || 0}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: (row.damagedStock || 0) > 0 ? amber : textMain }}>{row.damagedStock || 0}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.incomingStock || 0}</td>
                             <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{formatUSD(row.stockValueUsd)}</td>
                             <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.unitProductCost > 0 ? formatUSD(row.unitProductCost) : "—"}</td>
                             <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.salesPerDay.toFixed(1)}</td>
                             <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.daysUntilStockout != null ? `${Math.max(1, Math.round(row.daysUntilStockout))}d` : "—"}</td>
                             <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}><span style={getDecisionStyle(row.reorderStatus)}>{row.reorderStatus}</span></td>
-                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}><span style={getDecisionStyle(statusLabel)}>{statusLabel}</span></td>
                             <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, whiteSpace: "nowrap" }}>
                               <div style={{ display: "inline-flex", gap: 6 }}>
                                 <button style={{ ...styles.btnSecondary, padding: "5px 8px", fontSize: 11 }} onClick={() => { setStockTab("purchases"); setPurchaseForm((f) => ({ ...f, product_id: row.id })); }}>Restock</button>
@@ -9055,18 +9070,18 @@ export default function App() {
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 12, marginBottom: 20 }}>
                   <MiniStat label="Products" value={stockAuditData.totalProducts} tone="blue" />
-                  <MiniStat label="Total available" value={stockAuditData.totalAvailable} tone="green" />
-                  <MiniStat label="Total reserved" value={stockAuditData.totalReserved} tone="amber" />
-                  <MiniStat label="Total incoming" value={stockAuditData.totalIncoming} tone="blue" />
+                  <MiniStat label="Total accepted" value={stockAuditData.totalAccepted} tone="blue" />
+                  <MiniStat label="Total in stock" value={stockAuditData.totalAvailable} tone="green" />
+                  <MiniStat label="Total out delivered" value={stockAuditData.totalOutDelivered} tone="amber" />
                   <MiniStat label="Total delivered" value={stockAuditData.totalDelivered} tone="green" />
-                  <MiniStat label="Total returned" value={stockAuditData.totalReturned} tone="amber" />
+                  <MiniStat label="Total damaged" value={stockAuditData.totalDamaged} tone={stockAuditData.totalDamaged > 0 ? "amber" : "green"} />
                   <MiniStat label="Stock value USD" value={formatUSD(stockAuditData.totalStockValueUsd)} tone="green" />
                   <MiniStat label="Missing cost" value={stockAuditData.missingCostCount} tone={stockAuditData.missingCostCount > 0 ? "amber" : "green"} sub={stockAuditData.missingCostCount > 0 ? "products need cost" : "all OK"} />
                 </div>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
                     <thead>
-                      <tr>{["Product", "Available", "Reserved", "Incoming", "Delivered", "Returned", "Manual Adj.", "Landed Cost/Unit", "Stock Value USD"].map((h) => (
+                      <tr>{["Product", "Accepted", "In Stock", "Out Delivered", "Delivered", "Damaged", "Manual Adj.", "Landed Cost/Unit", "Stock Value USD"].map((h) => (
                         <th key={h} style={{ textAlign: "left", padding: "12px 10px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", whiteSpace: "nowrap" }}>{h}</th>
                       ))}</tr>
                     </thead>
@@ -9074,11 +9089,11 @@ export default function App() {
                       {stockAuditData.perProduct.map((row, idx) => (
                         <tr key={row.id} style={{ background: idx % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
                           <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{row.name}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.accepted}</td>
                           <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800, color: row.available < 0 ? red : textMain }}>{row.available}</td>
-                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.reserved}</td>
-                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.incoming}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.outDelivered}</td>
                           <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.delivered}</td>
-                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.returned}</td>
+                          <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: row.damaged > 0 ? amber : textMain }}>{row.damaged}</td>
                           <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: row.manualAdjustments !== 0 ? amber : textSoft }}>{row.manualAdjustments !== 0 ? `${row.manualAdjustments > 0 ? "+" : ""}${row.manualAdjustments}` : "—"}</td>
                           <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: row.landedCostUsd <= 0 ? red : textMain }}>{row.landedCostUsd > 0 ? formatUSD(row.landedCostUsd) : "Missing"}</td>
                           <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{formatUSD(row.stockValueUsd)}</td>

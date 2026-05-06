@@ -40,6 +40,10 @@ function getReceivedStockUnits(productId, stockPurchases = []) {
   }, 0);
 }
 
+export function calculateReceivedStock(productId, stockPurchases = []) {
+  return getReceivedStockUnits(productId, stockPurchases);
+}
+
 export function calculateReservedStock(productId, orders = []) {
   const normalizedProductId = getNormalizedProductId(productId);
   return orders.reduce((sum, order) => {
@@ -72,13 +76,23 @@ export function calculateReturnedStock(productId, orders = []) {
   }, 0);
 }
 
+export function calculateDamagedStock(productId, orders = []) {
+  const normalizedProductId = getNormalizedProductId(productId);
+  return orders.reduce((sum, order) => {
+    if (getNormalizedProductId(order?.productId) !== normalizedProductId) return sum;
+    const raw = String(order?.shippingStatusRaw ?? order?.shippingStatus ?? "");
+    const normalized = raw.toLowerCase().replace(/[-_]+/g, " ").trim();
+    return normalized === "damaged" ? sum + getOrderQuantity(order) : sum;
+  }, 0);
+}
+
 export function calculateAvailableStock(productId, stockPurchases = [], orders = []) {
   const receivedUnits = getReceivedStockUnits(productId, stockPurchases);
   if (receivedUnits <= 0) return 0;
+  const outDeliveredUnits = calculateReservedStock(productId, orders);
   const deliveredUnits = calculateDeliveredStock(productId, orders);
-  const reservedUnits = calculateReservedStock(productId, orders);
-  const returnedUnits = Math.min(calculateReturnedStock(productId, orders), receivedUnits);
-  const available = receivedUnits - deliveredUnits - reservedUnits + returnedUnits;
+  const damagedUnits = calculateDamagedStock(productId, orders);
+  const available = receivedUnits - outDeliveredUnits - deliveredUnits - damagedUnits;
   return Math.max(0, Math.min(available, receivedUnits));
 }
 
