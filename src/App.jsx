@@ -172,6 +172,68 @@ function createPageDateFilterState(preset = DEFAULT_PAGE_DATE_PRESET) {
   };
 }
 
+function buildOrderStatusMovement(prevOrder, nextOrder) {
+  const productId = String(nextOrder?.productId || "");
+  if (!productId) return null;
+
+  const orderId = String(nextOrder?.sourceOrderId || nextOrder?.order_id || nextOrder?.id || "");
+  const qty = Math.max(1, Math.round(Number(nextOrder?.quantity || 1)));
+  const nextConf = nextOrder?.confirmationStatus || "";
+  const nextShip = nextOrder?.shippingStatus || "";
+  const isNowConfirmed = isConfirmedStatus(nextConf);
+  const isNowDelivered = isDeliveredStatus(nextShip);
+  const isNowReturned = isReturnedStatus(nextShip);
+
+  if (prevOrder) {
+    const prevConf = prevOrder?.confirmationStatus || "";
+    const prevShip = prevOrder?.shippingStatus || "";
+    const wasConfirmed = isConfirmedStatus(prevConf);
+    const wasDelivered = isDeliveredStatus(prevShip);
+    const wasReturned = isReturnedStatus(prevShip);
+    const wasCancelled = isCancelledStatus(prevConf);
+    const isNowCancelled = isCancelledStatus(nextConf);
+
+    if (!wasConfirmed && isNowConfirmed && !isNowDelivered && !isNowReturned) {
+      return { product_id: productId, type: "stock_reserved", quantity_change: -qty, source_reference: orderId, note: `Order ${orderId} confirmed — ${qty} unit(s) reserved` };
+    }
+    if (!wasDelivered && isNowDelivered) {
+      return { product_id: productId, type: "stock_delivered", quantity_change: -qty, source_reference: orderId, note: `Order ${orderId} delivered — ${qty} unit(s)` };
+    }
+    if (!wasReturned && isNowReturned) {
+      return { product_id: productId, type: "stock_returned", quantity_change: qty, source_reference: orderId, note: `Order ${orderId} returned — ${qty} unit(s) back` };
+    }
+    if (wasConfirmed && isNowCancelled && !wasCancelled) {
+      return { product_id: productId, type: "stock_released", quantity_change: qty, source_reference: orderId, note: `Order ${orderId} cancelled — ${qty} unit(s) released` };
+    }
+  } else {
+    if (isNowConfirmed && !isNowDelivered && !isNowReturned) {
+      return { product_id: productId, type: "stock_reserved", quantity_change: -qty, source_reference: orderId, note: `New confirmed order ${orderId} — ${qty} unit(s) reserved` };
+    }
+    if (isNowDelivered) {
+      return { product_id: productId, type: "stock_delivered", quantity_change: -qty, source_reference: orderId, note: `Order ${orderId} imported as delivered — ${qty} unit(s)` };
+    }
+    if (isNowReturned) {
+      return { product_id: productId, type: "stock_returned", quantity_change: qty, source_reference: orderId, note: `Order ${orderId} imported as returned — ${qty} unit(s) back` };
+    }
+  }
+  return null;
+}
+
+function applyOrderMovementsToState(movements, prev) {
+  if (!movements.length) return prev;
+  const existingKeys = new Set(prev.map((m) => `${m.source_reference}::${m.type}`));
+  const now = new Date();
+  const newEntries = movements
+    .filter((m) => m.source_reference && !existingKeys.has(`${m.source_reference}::${m.type}`))
+    .map((m, i) => ({
+      movement_id: `mv-${now.getTime() + i}-${Math.random().toString(36).slice(2, 6)}`,
+      date: now.toISOString().slice(0, 10),
+      created_at: now.toISOString(),
+      ...m,
+    }));
+  return newEntries.length > 0 ? [...prev, ...newEntries] : prev;
+}
+
 function isQuotaExceededError(error) {
   if (!error) return false;
   const message = String(error?.message || error || "").toLowerCase();
@@ -4481,6 +4543,7 @@ export default function App() {
         const detectedHeaders = Object.keys(rows[0] || {});
         const unknownConfirmationStatuses = new Set();
         const unknownShippingStatuses = new Set();
+        const orderMovements = [];
 
         parsedRows.forEach((row) => {
           const productId = row.productId || resolveImportedProductId(row.product_ref || row.product_name);
@@ -4549,7 +4612,7 @@ export default function App() {
             const amountChanged = Math.max(0, Number(existing.amount_tsh || existing.orderTotalTzs || 0)) !== Math.max(0, Number(row.amount_tsh || 0));
             report.existingLeadsUpdated += 1;
             if (statusChanged || shippingChanged) report.statusChangesDetected += 1;
-            nextCustomers[existingIndex] = sanitizeCustomerRecord({
+            const updatedOrder = sanitizeCustomerRecord({
               ...existing,
               customerName: row.client_name || existing.customerName,
               phone: row.phone || existing.phone,
@@ -4595,55 +4658,59 @@ export default function App() {
                   )
                 : existing.history,
             });
+            nextCustomers[existingIndex] = updatedOrder;
+            const orderMov = buildOrderStatusMovement(existing, updatedOrder);
+            if (orderMov) orderMovements.push(orderMov);
             updatedCount += 1;
             return;
           }
 
-          nextCustomers.unshift(
-            sanitizeCustomerRecord({
-              id: buildNextId(nextCustomers, "C"),
-              customerName: row.client_name,
-              phone: row.phone,
-              city: row.city,
-              address: row.address,
-              productId: productId || "",
-              product_name_raw: productId ? "" : String(row.product_name || row.product_ref || "").trim(),
-              quantity: row.quantity,
-              orderDate: excelDateToInput(row.created_at),
-              paymentMethod: "COD",
-              status: shippingStatus || confirmationStatus,
-              confirmationStatus,
-              shippingStatus: ensureShippingStatusForConfirmed(confirmationStatus, shippingStatus),
-              confirmation_status_raw: row.confirmation_status_raw,
-              shipping_status_raw: row.shipping_status_raw,
-              confirmation_updated_at: row.confirmation_updated_at || null,
-              amount_tsh: row.amount_tsh,
-              amount_usd: row.amount_usd,
-              orderTotalTzs: row.amount_tsh,
-              notes: "",
-              sourceOrderId: row.order_id || null,
-              order_id: row.order_id || null,
-              import_key: row.import_key,
-              normalized_phone: row.normalized_phone,
-              product_ref: row.product_ref,
-              raw_row_data: row.raw_row_data,
-              extra_fields: row.extra_fields || {},
-              line_item_index: row.line_item_index || 0,
-              multi_product_revenue_allocated: Boolean(row.multi_product_revenue_allocated),
-              importSource: "excel",
-              lastImportedAt: importFinishedAt,
-              lastShippingImportedAt: shippingStatus ? importFinishedAt : null,
-              updatedAt: row.updated_at || importFinishedAt,
-              assignedTo: "Call Center",
-              history: [
-                buildHistoryEntry({
-                  action: "orders_import_created",
-                  source: "excel-orders",
-                  details: `Imported with ${formatStatusLabel(confirmationStatus)}${shippingStatus ? ` | shipping ${formatStatusLabel(shippingStatus)}` : ""}${!productId ? ` | unmatched product: ${String(row.product_name || "").trim()}` : ""}`,
-                }),
-              ],
-            })
-          );
+          const newOrder = sanitizeCustomerRecord({
+            id: buildNextId(nextCustomers, "C"),
+            customerName: row.client_name,
+            phone: row.phone,
+            city: row.city,
+            address: row.address,
+            productId: productId || "",
+            product_name_raw: productId ? "" : String(row.product_name || row.product_ref || "").trim(),
+            quantity: row.quantity,
+            orderDate: excelDateToInput(row.created_at),
+            paymentMethod: "COD",
+            status: shippingStatus || confirmationStatus,
+            confirmationStatus,
+            shippingStatus: ensureShippingStatusForConfirmed(confirmationStatus, shippingStatus),
+            confirmation_status_raw: row.confirmation_status_raw,
+            shipping_status_raw: row.shipping_status_raw,
+            confirmation_updated_at: row.confirmation_updated_at || null,
+            amount_tsh: row.amount_tsh,
+            amount_usd: row.amount_usd,
+            orderTotalTzs: row.amount_tsh,
+            notes: "",
+            sourceOrderId: row.order_id || null,
+            order_id: row.order_id || null,
+            import_key: row.import_key,
+            normalized_phone: row.normalized_phone,
+            product_ref: row.product_ref,
+            raw_row_data: row.raw_row_data,
+            extra_fields: row.extra_fields || {},
+            line_item_index: row.line_item_index || 0,
+            multi_product_revenue_allocated: Boolean(row.multi_product_revenue_allocated),
+            importSource: "excel",
+            lastImportedAt: importFinishedAt,
+            lastShippingImportedAt: shippingStatus ? importFinishedAt : null,
+            updatedAt: row.updated_at || importFinishedAt,
+            assignedTo: "Call Center",
+            history: [
+              buildHistoryEntry({
+                action: "orders_import_created",
+                source: "excel-orders",
+                details: `Imported with ${formatStatusLabel(confirmationStatus)}${shippingStatus ? ` | shipping ${formatStatusLabel(shippingStatus)}` : ""}${!productId ? ` | unmatched product: ${String(row.product_name || "").trim()}` : ""}`,
+              }),
+            ],
+          });
+          nextCustomers.unshift(newOrder);
+          const newOrderMov = buildOrderStatusMovement(null, newOrder);
+          if (newOrderMov) orderMovements.push(newOrderMov);
           report.newLeadsAdded += 1;
           createdCount += 1;
         });
@@ -4652,6 +4719,9 @@ export default function App() {
         const nextImportMeta = { ...(importMeta || getDefaultImportMeta()), lastOrdersImportAt: importFinishedAt };
         setCustomers(sanitizedNextCustomers);
         setImportMeta(nextImportMeta);
+        if (orderMovements.length > 0) {
+          setStockMovements((prev) => applyOrderMovementsToState(orderMovements, prev));
+        }
         const nextSnapshot = {
           ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
           customers: sanitizedNextCustomers,
@@ -4730,6 +4800,7 @@ export default function App() {
         };
         const unmatchedExamples = new Set();
         const detectedHeaders = Object.keys(rows[0] || {});
+        const shippingMovements = [];
 
         parsedRows.forEach((row) => {
           const nextStatus = normalizeOrderStatus(row.shipping_status_raw);
@@ -4766,7 +4837,7 @@ export default function App() {
             return;
           }
 
-          nextCustomers[existingIndex] = sanitizeCustomerRecord({
+          const updatedShippingOrder = sanitizeCustomerRecord({
             ...existing,
             shippingStatus: nextStatus,
             status: nextStatus,
@@ -4794,12 +4865,18 @@ export default function App() {
               })
             ),
           });
+          nextCustomers[existingIndex] = updatedShippingOrder;
+          const shipMov = buildOrderStatusMovement(existing, updatedShippingOrder);
+          if (shipMov) shippingMovements.push(shipMov);
           updatedCount += 1;
         });
 
         const sanitizedNextCustomers = nextCustomers.map(sanitizeCustomerRecord).filter(Boolean);
         const nextImportMeta = { ...(importMeta || getDefaultImportMeta()), lastShippingImportAt: importFinishedAt };
         setCustomers(sanitizedNextCustomers);
+        if (shippingMovements.length > 0) {
+          setStockMovements((prev) => applyOrderMovementsToState(shippingMovements, prev));
+        }
         setImportMeta(nextImportMeta);
         const nextSnapshot = {
           ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
@@ -4903,6 +4980,7 @@ export default function App() {
   };
 
   const updateCustomerStatus = (customerId, nextStatus) => {
+    const existingForMovement = customers.find((c) => c.id === customerId);
     setCustomers((prev) =>
       prev.map((c) =>
         c.id === customerId
@@ -4923,9 +5001,19 @@ export default function App() {
           : c
       )
     );
+    if (existingForMovement) {
+      const previewOrder = {
+        ...existingForMovement,
+        confirmationStatus: nextStatus,
+        shippingStatus: ensureShippingStatusForConfirmed(nextStatus, existingForMovement.shippingStatus),
+      };
+      const mov = buildOrderStatusMovement(existingForMovement, previewOrder);
+      if (mov) setStockMovements((prev) => applyOrderMovementsToState([mov], prev));
+    }
   };
 
   const updateCustomerShippingStatus = (customerId, nextStatus) => {
+    const existingForShipMovement = customers.find((c) => c.id === customerId);
     setCustomers((prev) =>
       prev.map((c) =>
         c.id === customerId
@@ -4949,6 +5037,15 @@ export default function App() {
           : c
       )
     );
+    if (existingForShipMovement) {
+      const previewShipOrder = {
+        ...existingForShipMovement,
+        shippingStatus: nextStatus,
+        confirmationStatus: isConfirmationConfirmed(existingForShipMovement.confirmationStatus) ? existingForShipMovement.confirmationStatus : "confirmed",
+      };
+      const shipMov = buildOrderStatusMovement(existingForShipMovement, previewShipOrder);
+      if (shipMov) setStockMovements((prev) => applyOrderMovementsToState([shipMov], prev));
+    }
   };
 
   const assignCustomerOwner = (customerId, nextOwner) => {
