@@ -194,63 +194,67 @@ function isAdsCampaignsTableMissing(error) {
   return error?.code === "42P01" || message.includes("ads_campaigns");
 }
 
-export async function saveAdsCampaignsToSupabase(campaigns = [], workspaceId = supabaseWorkspaceId) {
+export async function saveAdsCampaignsToSupabase(campaigns = []) {
   if (!supabaseEnabled || !supabase || !campaigns.length) return { saved: false, notice: "" };
-  const rows = campaigns.map((c) => ({
-    workspace_id: workspaceId,
-    campaign_id: String(c.campaignId || ""),
-    campaign_name: String(c.campaignName || ""),
-    date_start: String(c.dateStart || ""),
-    date_end: String(c.dateEnd || ""),
-    spend_usd: Number(c.spendUsd || 0),
-    spend_tsh: Number(c.spendTsh || 0),
-    product_id: String(c.productId || ""),
-    is_mapped: Boolean(c.isMapped),
-    is_unmapped: Boolean(c.isUnmapped),
-    leads: Number(c.leads || 0),
-    imported_at: c.savedAt || new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  })).filter((r) => r.campaign_id && r.date_start && r.date_end);
+  const rows = campaigns
+    .map((c) => ({
+      campaign_id: String(c.campaignId || ""),
+      campaign_name: String(c.campaignName || ""),
+      date_start: String(c.dateStart || ""),
+      date_end: String(c.dateEnd || ""),
+      spend_usd: Number(c.spendUsd || 0),
+      spend_tsh: Number(c.spendTsh || 0),
+      product_id: String(c.productId || ""),
+      product_name: String(c.productName || ""),
+      is_mapped: Boolean(c.isMapped),
+      impressions: Number(c.impressions || 0),
+      clicks: Number(c.clicks || 0),
+      leads: Number(c.leads || 0),
+      updated_at: new Date().toISOString(),
+    }))
+    .filter((r) => r.campaign_id && r.date_start && r.date_end);
   if (!rows.length) return { saved: false, notice: "" };
   try {
     const { error } = await supabase
       .from("ads_campaigns")
-      .upsert(rows, { onConflict: "workspace_id,campaign_id,date_start,date_end" });
+      .upsert(rows, { onConflict: "campaign_id,date_start", ignoreDuplicates: false });
     if (error) {
-      if (isAdsCampaignsTableMissing(error)) return { saved: false, notice: "Run migration 003_ads_campaigns.sql to enable the ads_campaigns table." };
+      if (isAdsCampaignsTableMissing(error)) return { saved: false, notice: "Run migration 003_ads_campaigns.sql in your Supabase SQL editor to enable campaign tracking." };
       throw error;
     }
     return { saved: true, notice: "" };
   } catch (err) {
-    if (isAdsCampaignsTableMissing(err)) return { saved: false, notice: "Run migration 003_ads_campaigns.sql to enable the ads_campaigns table." };
+    if (isAdsCampaignsTableMissing(err)) return { saved: false, notice: "Run migration 003_ads_campaigns.sql in your Supabase SQL editor to enable campaign tracking." };
     return { saved: false, notice: String(err?.message || "Failed to save ads campaigns.") };
   }
 }
 
-export async function loadAdsCampaignsFromSupabase(workspaceId = supabaseWorkspaceId) {
+export async function loadAdsCampaignsFromSupabase() {
   if (!supabaseEnabled || !supabase) return { available: false, campaigns: [] };
   try {
     const { data, error } = await supabase
       .from("ads_campaigns")
       .select("*")
-      .eq("workspace_id", workspaceId)
-      .order("imported_at", { ascending: false });
+      .order("created_at", { ascending: false });
     if (error) {
       if (isAdsCampaignsTableMissing(error)) return { available: false, campaigns: [] };
       throw error;
     }
     const campaigns = (data || []).map((row) => ({
-      campaignId: row.campaign_id,
+      campaignId: row.campaign_id || "",
       campaignName: row.campaign_name || "",
       dateStart: String(row.date_start || ""),
       dateEnd: String(row.date_end || ""),
       spendUsd: Number(row.spend_usd || 0),
       spendTsh: Number(row.spend_tsh || 0),
       productId: row.product_id || "",
+      productName: row.product_name || "",
       isMapped: Boolean(row.is_mapped),
-      isUnmapped: Boolean(row.is_unmapped),
+      isUnmapped: !row.is_mapped,
+      impressions: Number(row.impressions || 0),
+      clicks: Number(row.clicks || 0),
       leads: Number(row.leads || 0),
-      savedAt: row.imported_at || null,
+      savedAt: row.created_at || null,
     }));
     return { available: true, campaigns };
   } catch {

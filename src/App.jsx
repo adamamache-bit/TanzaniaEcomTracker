@@ -4001,12 +4001,68 @@ export default function App() {
       const manualMappedCount = mappedRows.filter((r) => r.manuallyMapped).length;
       const unmappedCount = unmappedRows.length;
       const unmappedSpendTzs = unmappedRows.reduce((sum, row) => sum + convertSpendToTzs(Number(row.spend || 0)), 0);
+      const importedAt = new Date().toISOString();
 
+      // Build campaign records for ALL rows (mapped + unmapped) — done BEFORE early return
+      // so even fully-unmapped imports are persisted for CPL tracking.
+      const newCampaignRecords = allMappedRows
+        .filter((row) => Number(row.spend || 0) > 0)
+        .map((row) => {
+          const rawSpend = Number(row.spend || 0);
+          // Prefer the actual Meta campaign_id (row.campaignId) over the synthetic row.id fallback
+          const campaignId = String(row.campaignId || row.id || "");
+          const matchedProduct = row.mappedProductId ? products.find((p) => p.id === row.mappedProductId) : null;
+          return {
+            campaignId,
+            campaignName: String(row.campaignName || ""),
+            dateStart: metaAdsState.dateStart,
+            dateEnd: metaAdsState.dateEnd,
+            // spendUsd: always convert to USD regardless of account currency
+            spendUsd: accountCurrency === "TZS" ? rawSpend / USD_TO_TZS : rawSpend,
+            spendTsh: Math.round(convertSpendToTzs(rawSpend)),
+            productId: row.mappedProductId || "",
+            productName: matchedProduct?.name || "",
+            isMapped: Boolean(row.mappedProductId),
+            isUnmapped: !row.mappedProductId,
+            impressions: Number(row.impressions || 0),
+            clicks: Number(row.clicks || 0),
+            leads: Math.max(0, Number(row.trackedLeads ?? row.leads ?? 0)),
+            savedAt: importedAt,
+          };
+        })
+        .filter((r) => r.campaignId); // drop any rows with no usable campaign ID
+
+      // Merge into savedCampaigns; dedup key = campaignId::dateStart::dateEnd
+      // Same period re-imported → REPLACE (no double-count). New period → ACCUMULATE.
+      const existingSaved = metaAdsState.savedCampaigns || [];
+      const savedMap = new Map();
+      for (const c of existingSaved) savedMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
+      for (const c of newCampaignRecords) savedMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
+      const mergedSavedCampaigns = Array.from(savedMap.values());
+
+      // Persist to Supabase fire-and-forget; also update local adsCampaignsData state
+      if (newCampaignRecords.length) {
+        if (supabaseEnabled) saveAdsCampaignsToSupabase(newCampaignRecords).catch(() => {});
+        setAdsCampaignsData((prev) => {
+          const sbMap = new Map();
+          for (const c of (prev.campaigns || [])) sbMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
+          for (const c of newCampaignRecords) sbMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
+          return { ...prev, campaigns: Array.from(sbMap.values()), lastLoaded: importedAt };
+        });
+      }
+
+      // Early return AFTER saving — unmapped-only imports still persist campaign records
       if (!mappedRows.length) {
+        setMetaAdsState((prev) => ({
+          ...prev,
+          lastSyncAt: importedAt,
+          unmappedImportedSpendTzs: Math.round(unmappedSpendTzs),
+          savedCampaigns: mergedSavedCampaigns,
+        }));
         if (!options.silent) {
           setMetaAdsNotice(
             unmappedRows.length
-              ? `No campaigns matched to products. ${unmappedRows.length} campaign(s) have no mapping code — assign them below.`
+              ? `No campaigns matched to products. ${unmappedRows.length} campaign(s) saved — assign them below.`
               : "No campaign rows found to import."
           );
         }
@@ -4021,44 +4077,7 @@ export default function App() {
         acc[productId].actualLeads += Math.max(0, Number(row.actualLeads ?? row.leads ?? 0));
         return acc;
       }, {});
-
-      const importedAt = new Date().toISOString();
       const totalMappedSpendTzs = Object.values(groupedByProduct).reduce((s, e) => s + e.spendTzs, 0);
-
-      // Build campaign records for ALL rows (mapped + unmapped) for cumulative tracking
-      const newCampaignRecords = allMappedRows
-        .filter((row) => Number(row.spend || 0) > 0 && String(row.id || ""))
-        .map((row) => ({
-          campaignId: String(row.id || ""),
-          campaignName: String(row.campaignName || ""),
-          dateStart: metaAdsState.dateStart,
-          dateEnd: metaAdsState.dateEnd,
-          spendUsd: Number(accountCurrency === "TZS" ? 0 : Number(row.spend || 0)),
-          spendTsh: Math.round(convertSpendToTzs(Number(row.spend || 0))),
-          productId: row.mappedProductId || "",
-          isMapped: Boolean(row.mappedProductId),
-          isUnmapped: !row.mappedProductId,
-          leads: Math.max(0, Number(row.trackedLeads ?? row.leads ?? 0)),
-          savedAt: importedAt,
-        }));
-
-      // Merge new records into savedCampaigns, dedup by campaignId::dateStart::dateEnd
-      const existingSaved = metaAdsState.savedCampaigns || [];
-      const savedMap = new Map();
-      for (const c of existingSaved) savedMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
-      for (const c of newCampaignRecords) savedMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
-      const mergedSavedCampaigns = Array.from(savedMap.values());
-
-      // Fire-and-forget save to Supabase
-      if (supabaseEnabled && newCampaignRecords.length) {
-        saveAdsCampaignsToSupabase(newCampaignRecords).catch(() => {});
-        setAdsCampaignsData((prev) => {
-          const sbMap = new Map();
-          for (const c of (prev.campaigns || [])) sbMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
-          for (const c of newCampaignRecords) sbMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
-          return { ...prev, campaigns: Array.from(sbMap.values()), lastLoaded: importedAt };
-        });
-      }
 
       setTracking((prev) => {
         const next = [...prev];
