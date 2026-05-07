@@ -145,7 +145,7 @@ import {
   calculateServiceFeeForOrder,
 } from "./utils/stockCalculations";
 import { getOrderRevenueAmounts } from "./utils/calculations";
-import { calculateTotalAdsSpend } from "./utils/adsMapping";
+import { calculateTotalAdsSpend, deduplicateCampaigns } from "./utils/adsMapping";
 import {
   normalizeStatus,
   isConfirmedStatus,
@@ -3694,6 +3694,16 @@ export default function App() {
     [metaCampaignRows]
   );
 
+  const mappedCampaignsByProduct = useMemo(() => {
+    const map = {};
+    for (const row of metaCampaignRows) {
+      if (!row.mappedProductId) continue;
+      if (!map[row.mappedProductId]) map[row.mappedProductId] = [];
+      map[row.mappedProductId].push(row);
+    }
+    return map;
+  }, [metaCampaignRows]);
+
   const metaInsightsSummary = useMemo(() => {
     if (!metaAdsInsights?.summary) {
       return {
@@ -3879,20 +3889,35 @@ export default function App() {
 
   const importMetaInsightsPayload = useCallback(
     (payload, options = {}) => {
-      const mappedRows = buildMappedMetaRows(payload?.rows || [], products, metaAdsState.campaignMappings);
-      const matchedRows = mappedRows.filter((row) => row.mappedProductId && Number(row.spend || 0) > 0);
-      if (!matchedRows.length) {
-        if (!options.silent) setMetaAdsNotice("No matched campaign row is ready to import.");
-        return false;
-      }
+      const rawRows = deduplicateCampaigns(payload?.rows || []);
+      const allMappedRows = buildMappedMetaRows(rawRows, products, metaAdsState.campaignMappings);
 
       const accountCurrency = String(selectedMetaAccount?.currency || "USD").toUpperCase();
       const convertSpendToTzs = (amount) => (accountCurrency === "TZS" ? amount : amount * USD_TO_TZS);
-      const groupedByProduct = matchedRows.reduce((acc, row) => {
-        const productId = row.mappedProductId;
-        if (!acc[productId]) {
-          acc[productId] = { spendTzs: 0, leads: 0, actualLeads: 0 };
+
+      const mappedRows = allMappedRows.filter((row) => row.mappedProductId && Number(row.spend || 0) > 0);
+      const unmappedRows = allMappedRows.filter((row) => !row.mappedProductId && Number(row.spend || 0) > 0);
+
+      const totalCampaigns = allMappedRows.length;
+      const autoMappedCount = mappedRows.filter((r) => r.autoMapped).length;
+      const manualMappedCount = mappedRows.filter((r) => r.manuallyMapped).length;
+      const unmappedCount = unmappedRows.length;
+      const unmappedSpendTzs = unmappedRows.reduce((sum, row) => sum + convertSpendToTzs(Number(row.spend || 0)), 0);
+
+      if (!mappedRows.length) {
+        if (!options.silent) {
+          setMetaAdsNotice(
+            unmappedRows.length
+              ? `No campaigns matched to products. ${unmappedRows.length} campaign(s) have no mapping code — assign them below.`
+              : "No campaign rows found to import."
+          );
         }
+        return false;
+      }
+
+      const groupedByProduct = mappedRows.reduce((acc, row) => {
+        const productId = row.mappedProductId;
+        if (!acc[productId]) acc[productId] = { spendTzs: 0, leads: 0, actualLeads: 0 };
         acc[productId].spendTzs += convertSpendToTzs(Number(row.spend || 0));
         acc[productId].leads += Math.max(0, Number(row.trackedLeads ?? row.leads ?? 0));
         acc[productId].actualLeads += Math.max(0, Number(row.actualLeads ?? row.leads ?? 0));
@@ -3900,10 +3925,10 @@ export default function App() {
       }, {});
 
       const importedAt = new Date().toISOString();
+      const totalMappedSpendTzs = Object.values(groupedByProduct).reduce((s, e) => s + e.spendTzs, 0);
 
       setTracking((prev) => {
         const next = [...prev];
-
         Object.entries(groupedByProduct).forEach(([productId, stats]) => {
           const existingIndex = next.findIndex((row) => row.productId === productId && row.metaManaged);
           const nextPayload = {
@@ -3920,17 +3945,12 @@ export default function App() {
             dateEnd: metaAdsState.dateEnd,
             metaCurrency: accountCurrency,
           };
-
           if (existingIndex >= 0) {
             next[existingIndex] = { ...next[existingIndex], ...nextPayload };
           } else {
-            next.push({
-              id: buildNextId(next, "T"),
-              ...nextPayload,
-            });
+            next.push({ id: buildNextId(next, "T"), ...nextPayload });
           }
         });
-
         return next;
       });
 
@@ -3953,19 +3973,32 @@ export default function App() {
       setMetaAdsState((prev) => ({
         ...prev,
         lastSyncAt: importedAt,
+        unmappedImportedSpendTzs: Math.round(unmappedSpendTzs),
         lastSyncSummary: {
           since: metaAdsState.dateStart,
           until: metaAdsState.dateEnd,
+          totalCampaigns,
+          autoMappedCampaigns: autoMappedCount,
+          manualMappedCampaigns: manualMappedCount,
+          unmappedCampaigns: unmappedCount,
           matchedProducts: Object.keys(groupedByProduct).length,
-          matchedRows: matchedRows.length,
-          totalSpendTzs: Object.values(groupedByProduct).reduce((sum, entry) => sum + Number(entry.spendTzs || 0), 0),
-          totalLeads: Object.values(groupedByProduct).reduce((sum, entry) => sum + Number(entry.leads || 0), 0),
-          totalActualLeads: Object.values(groupedByProduct).reduce((sum, entry) => sum + Number(entry.actualLeads || 0), 0),
+          matchedRows: mappedRows.length,
+          totalSpendTzs: Math.round(totalMappedSpendTzs),
+          unmappedSpendTzs: Math.round(unmappedSpendTzs),
+          totalLeads: Object.values(groupedByProduct).reduce((s, e) => s + e.leads, 0),
+          totalActualLeads: Object.values(groupedByProduct).reduce((s, e) => s + e.actualLeads, 0),
         },
       }));
 
       if (!options.silent) {
-        setMetaAdsNotice(`Imported Meta spend into ${Object.keys(groupedByProduct).length} product(s).`);
+        const reportParts = [
+          `${totalCampaigns} campaigns imported — ${autoMappedCount} auto-mapped, ${manualMappedCount} manual, ${unmappedCount} unmapped.`,
+          `Spend to products: ${formatTZS(Math.round(totalMappedSpendTzs))} across ${Object.keys(groupedByProduct).length} product(s).`,
+          unmappedSpendTzs > 0
+            ? `Unmapped spend: ${formatTZS(Math.round(unmappedSpendTzs))} (${unmappedCount} campaign(s) not assigned).`
+            : "All campaigns with spend mapped to products.",
+        ];
+        setMetaAdsNotice(reportParts.join(" | "));
       }
 
       return true;
@@ -8925,7 +8958,6 @@ export default function App() {
                     <tbody>
                       {stockForecastRows.map((row, idx) => {
                         const minStock = Number(situationData?.productAlertThresholds?.minStockQuantity ?? 3);
-                        const statusLabel = row.availableStock <= 0 ? "Out of Stock" : row.availableStock <= minStock ? "Low Stock" : row.incomingStock > 0 && row.availableStock <= minStock * 2 ? "Incoming" : "OK";
                         return (
                           <tr key={row.id} style={{ background: idx % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
                             <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{row.name}</td>
@@ -10321,7 +10353,7 @@ export default function App() {
                   <MiniStat label="Selected account" value={selectedMetaAccount?.name || metaAdsState.accountId || "Not loaded"} tone="blue" sub={selectedMetaAccount ? `${selectedMetaAccount.currency || "USD"} | ${selectedMetaAccount.timezoneName || "Meta account"}` : metaAdsState.accountId ? "Manual ad account ID" : "Load accounts or paste account ID manually"} />
                   <MiniStat label="Meta spend" value={formatMetaMoney(metaDashboardMetrics.spend)} tone="amber" sub={`${metaDashboardMetrics.campaigns} campaign rows in range`} />
                   <MiniStat label="Tracked leads" value={metaDashboardMetrics.leads} tone="green" sub={`${formatMetaLeadSourceLabel(metaDashboardMetrics.trackedLeadSource)} | Actual leads ${formatInteger(metaDashboardMetrics.actualLeads)}`} />
-                  <MiniStat label="Last import" value={metaAdsState.lastSyncAt ? new Date(metaAdsState.lastSyncAt).toLocaleString() : "Not imported"} tone="blue" sub={metaAdsState.lastSyncSummary ? `${metaAdsState.lastSyncSummary.matchedProducts} products matched | ${formatInteger(metaAdsState.lastSyncSummary.totalLeads || 0)} tracked leads | Total spend ${formatUsdFromTzs(metaAdsState.lastSyncSummary.accountTotalSpendTzs || metaAdsState.lifetimeSpendTzs || 0)}` : "No Meta import yet"} />
+                  <MiniStat label="Last import" value={metaAdsState.lastSyncAt ? new Date(metaAdsState.lastSyncAt).toLocaleString() : "Not imported"} tone="blue" sub={metaAdsState.lastSyncSummary ? `${metaAdsState.lastSyncSummary.totalCampaigns || metaAdsState.lastSyncSummary.matchedRows || 0} campaigns | ${metaAdsState.lastSyncSummary.matchedProducts || 0} products | Unmapped: ${formatTZS(metaAdsState.lastSyncSummary.unmappedSpendTzs || 0)}` : "No Meta import yet"} />
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(7, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 12, marginTop: 12 }}>
@@ -10334,23 +10366,69 @@ export default function App() {
                   <MiniStat label="CPM" value={formatMetaMoney(metaDashboardMetrics.cpm)} tone="amber" sub={`CPP ${formatMetaMoney(metaDashboardMetrics.cpp)} | Freq ${metaDashboardMetrics.frequency.toFixed(2)}`} />
                 </div>
 
+                {/* Per-product campaign breakdown */}
+                {Object.keys(mappedCampaignsByProduct).length > 0 && (
+                  <div style={{ ...styles.softStat, marginTop: 16, border: "1px solid rgba(31,143,95,0.16)", background: "linear-gradient(180deg, rgba(236,253,245,0.6), rgba(255,255,255,0.9))" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: green }}>Auto-mapped</div>
+                        <div style={{ marginTop: 6, fontSize: 20, fontWeight: 900 }}>Campaigns by product</div>
+                        <div style={{ marginTop: 4, color: textSoft, fontSize: 13 }}>
+                          {metaCampaignRows.filter((r) => r.mappedProductId).length} campaign(s) mapped to {Object.keys(mappedCampaignsByProduct).length} product(s)
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gap: 10 }}>
+                      {Object.entries(mappedCampaignsByProduct).map(([productId, campaigns]) => {
+                        const product = products.find((p) => p.id === productId);
+                        const totalSpendTzs = campaigns.reduce((sum, r) => sum + (r.spendTzs || 0), 0);
+                        return (
+                          <div key={productId} style={{ padding: 14, borderRadius: 14, border: `1px solid ${cardBorder}`, background: "rgba(255,255,255,0.84)" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                              <div style={{ fontWeight: 800, fontSize: 15 }}>{product?.name || productId}</div>
+                              <div style={{ fontWeight: 800, color: accent }}>{formatTZS(Math.round(totalSpendTzs))}</div>
+                            </div>
+                            <div style={{ display: "grid", gap: 5 }}>
+                              {campaigns.map((row) => (
+                                <div key={row.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: textSoft }}>
+                                  <div style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>{row.campaignName || "—"}</div>
+                                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                                    {row.autoMapped && <span style={{ ...styles.badge, background: "rgba(31,143,95,0.1)", color: green, fontSize: 10 }}>auto</span>}
+                                    {row.manuallyMapped && <span style={{ ...styles.badge, background: "rgba(29,95,208,0.1)", color: accent, fontSize: 10 }}>manual</span>}
+                                    <span style={{ fontWeight: 700, color: textMain }}>{formatTZS(Math.round(row.spendTzs || 0))}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {unmappedMetaCampaignRows.length ? (
                   <div style={{ ...styles.softStat, marginTop: 16 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
                       <div>
-                        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: textSoft }}>Campaign naming review</div>
+                        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: amber }}>Needs attention</div>
                         <div style={{ marginTop: 8, fontSize: 20, fontWeight: 900 }}>Unmapped campaigns</div>
                         <div style={{ marginTop: 6, color: textSoft, lineHeight: 1.55 }}>
-                          Standard format: <strong>TZ | PC001 | COLD | TEST | V1</strong>. If parsing fails, choose the product manually below.
+                          Campaigns are auto-mapped when their name contains a product mapping code (e.g. <strong>TZ | DSP4 | COLD</strong> maps to the product with code <strong>DSP4</strong>). Assign manually below or skip — skipped spend is tracked as global unmapped cost.
                         </div>
                       </div>
-                      <div style={{ ...styles.badge, background: "rgba(199,131,34,0.12)", color: amber, border: "1px solid rgba(199,131,34,0.18)" }}>
-                        {unmappedMetaCampaignRows.length} campaigns need mapping
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", flexShrink: 0 }}>
+                        <div style={{ ...styles.badge, background: "rgba(199,131,34,0.12)", color: amber, border: "1px solid rgba(199,131,34,0.18)" }}>
+                          {unmappedMetaCampaignRows.length} campaigns unassigned
+                        </div>
+                        <div style={{ fontSize: 12, color: textSoft, fontWeight: 600 }}>
+                          Unmapped spend: {formatTZS(Math.round(unmappedMetaCampaignRows.reduce((s, r) => s + (r.spendTzs || 0), 0)))}
+                        </div>
                       </div>
                     </div>
 
                     <div style={{ display: "grid", gap: 10 }}>
-                      {unmappedMetaCampaignRows.slice(0, 8).map((row) => (
+                      {unmappedMetaCampaignRows.slice(0, 10).map((row) => (
                         <div
                           key={row.id}
                           style={{
@@ -10367,7 +10445,7 @@ export default function App() {
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 800, color: textMain }}>{row.campaignName || "Unnamed campaign"}</div>
                             <div style={{ marginTop: 6, color: textSoft, fontSize: 12, lineHeight: 1.5 }}>
-                              Code: <strong>{row.productCode || "N/A"}</strong> | Phase: <strong>{row.phase || "N/A"}</strong> | Version: <strong>{row.version || "N/A"}</strong> | Created: <strong>{row.campaignMetadata?.created_at || "N/A"}</strong>
+                              Spend: <strong>{formatTZS(Math.round(row.spendTzs || 0))}</strong> | Code detected: <strong>{row.productCode || "none"}</strong> | Phase: <strong>{row.phase || "N/A"}</strong> | Version: <strong>{row.version || "N/A"}</strong>
                             </div>
                           </div>
                           <select
@@ -10383,10 +10461,10 @@ export default function App() {
                               }))
                             }
                           >
-                            <option value="">Skip this campaign</option>
+                            <option value="">Skip (add to unmapped spend)</option>
                             {products.map((product) => (
                               <option key={product.id} value={product.id}>
-                                {(product.code || product.id)} | {product.name}
+                                [{product.mappingCode || product.id}] {product.name}
                               </option>
                             ))}
                           </select>

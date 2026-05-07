@@ -428,26 +428,30 @@ export function buildMappedMetaRows(rows, products, campaignMappings = {}) {
   };
 
   return rows.map((row) => {
-    const manualMatch = campaignMappings[row.id] || "";
+    // hasManualDecision = user explicitly set a value (even empty = "skip")
+    const hasManualDecision = Object.prototype.hasOwnProperty.call(campaignMappings, row.id);
+    const manualValue = hasManualDecision ? String(campaignMappings[row.id] || "") : null;
     const metadata = parseCampaignNameMetadata(row.campaignName);
     const mappedCampaign = mapCampaignSpendToProduct(
-      {
-        ...row,
-        campaignName: metadata.campaign_name,
-      },
+      { ...row, campaignName: metadata.campaign_name },
       products,
       USD_TO_TZS
     );
-    const parsedProductMatch = mappedCampaign.productId || "";
-    const autoMatch =
-      manualMatch ||
-      parsedProductMatch ||
-      matchProductIdFromText(`${row.campaignName} ${row.adsetName || ""}`, products);
+    const codeMatch = mappedCampaign.productId || "";
+    // Priority: 1) manual override, 2) mapping-code auto-match
+    // No fuzzy text fallback — too many false positives for spend allocation
+    const resolvedProductId = manualValue !== null ? manualValue : codeMatch;
+    const autoMapped = manualValue === null && Boolean(codeMatch);
+    const manuallyMapped = manualValue !== null && Boolean(manualValue);
+    const isManuallySkipped = hasManualDecision && !campaignMappings[row.id];
+
     return {
       ...row,
-      mappedProductId: autoMatch || "",
-      mappedProductName: products.find((product) => product.id === autoMatch)?.name || "",
-      autoMatch: !manualMatch && Boolean(autoMatch),
+      mappedProductId: resolvedProductId,
+      mappedProductName: products.find((p) => p.id === resolvedProductId)?.name || "",
+      autoMapped,
+      manuallyMapped,
+      isManuallySkipped,
       campaignMetadata: {
         ...metadata,
         created_at: row.created_at || row.createdAt || null,
@@ -457,10 +461,10 @@ export function buildMappedMetaRows(rows, products, campaignMappings = {}) {
       productCode: metadata.product_code,
       phase: metadata.phase,
       version: metadata.version,
-      mappingCode: generateProductMappingCode(products.find((product) => product.id === autoMatch) || {}),
+      mappingCode: generateProductMappingCode(products.find((p) => p.id === resolvedProductId) || {}),
       spendTzs: mappedCampaign.spendTsh,
       spendUsd: mappedCampaign.spendUsd,
-      usedStructuredParsing: !manualMatch && Boolean(parsedProductMatch),
+      usedStructuredParsing: manualValue === null && Boolean(codeMatch),
     };
   });
 }
@@ -698,6 +702,7 @@ export function getDefaultMetaAdsState() {
     campaignMetadata: [],
     lastSyncAt: null,
     lastSyncSummary: null,
+    unmappedImportedSpendTzs: 0,
     dailySpendSnapshots: [],
     baselineTotalSpendTzs: 0,
     baselineSpendBucket: null,
@@ -810,6 +815,7 @@ export function sanitizeMetaAdsState(value) {
     autoSyncIntervalMinutes: Math.max(1, Number(value?.autoSyncIntervalMinutes || defaults.autoSyncIntervalMinutes)),
     lastSyncAt: value?.lastSyncAt || null,
     lastSyncSummary: value?.lastSyncSummary || null,
+    unmappedImportedSpendTzs: Math.max(0, parseLooseNumber(value?.unmappedImportedSpendTzs)),
     dailySpendSnapshots,
     baselineTotalSpendTzs: Math.max(0, parseLooseNumber(value?.baselineTotalSpendTzs)),
     baselineSpendBucket: value?.baselineSpendBucket || null,

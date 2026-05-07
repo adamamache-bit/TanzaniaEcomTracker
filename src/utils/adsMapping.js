@@ -39,15 +39,32 @@ export function generateProductMappingCode(product = {}) {
 
 export function extractMappingCodeFromCampaignName(campaignName, products = []) {
   const campaign = String(campaignName || "");
-  const structuredParts = campaign.split("|").map((part) => part.trim());
-  if (structuredParts.length >= 2) {
-    const directCode = normalizeCode(structuredParts[1]);
-    if (directCode) return directCode;
+  const parts = campaign.split("|").map((p) => p.trim()).filter(Boolean);
+  const productCodes = products.map((p) => generateProductMappingCode(p)).filter(Boolean);
+
+  // When no products to match against, return raw segment[1] code
+  if (!productCodes.length) {
+    return parts.length >= 2 ? normalizeCode(parts[1]) : "";
   }
 
-  const productCodes = products.map((product) => generateProductMappingCode(product)).filter(Boolean);
+  // Pass 1: exact match of any pipe-segment against a product code
+  for (const part of parts) {
+    const code = normalizeCode(part);
+    if (!code) continue;
+    if (productCodes.includes(code)) return code;
+  }
+
+  // Pass 2: any pipe-segment contains a product code (e.g. "DSP4V2" contains "DSP4")
+  for (const part of parts) {
+    const code = normalizeCode(part);
+    if (!code) continue;
+    const found = productCodes.find((pc) => code.includes(pc));
+    if (found) return found;
+  }
+
+  // Pass 3: full normalized campaign name contains a product code
   const normalizedCampaign = normalizeCode(campaign);
-  return productCodes.find((code) => normalizedCampaign.includes(code)) || "";
+  return productCodes.find((pc) => normalizedCampaign.includes(pc)) || "";
 }
 
 export function mapCampaignSpendToProduct(campaign = {}, products = [], exchangeRate = DEFAULT_EXCHANGE_RATE) {
