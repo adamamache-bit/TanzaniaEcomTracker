@@ -187,6 +187,77 @@ export async function syncNormalizedTables(snapshot = {}, workspaceId = supabase
   ]);
 }
 
+// ── ADS CAMPAIGNS: optional persistent spend table ───────────────────────────
+
+function isAdsCampaignsTableMissing(error) {
+  const message = String(error?.message || error?.details || error?.hint || "").toLowerCase();
+  return error?.code === "42P01" || message.includes("ads_campaigns");
+}
+
+export async function saveAdsCampaignsToSupabase(campaigns = [], workspaceId = supabaseWorkspaceId) {
+  if (!supabaseEnabled || !supabase || !campaigns.length) return { saved: false, notice: "" };
+  const rows = campaigns.map((c) => ({
+    workspace_id: workspaceId,
+    campaign_id: String(c.campaignId || ""),
+    campaign_name: String(c.campaignName || ""),
+    date_start: String(c.dateStart || ""),
+    date_end: String(c.dateEnd || ""),
+    spend_usd: Number(c.spendUsd || 0),
+    spend_tsh: Number(c.spendTsh || 0),
+    product_id: String(c.productId || ""),
+    is_mapped: Boolean(c.isMapped),
+    is_unmapped: Boolean(c.isUnmapped),
+    leads: Number(c.leads || 0),
+    imported_at: c.savedAt || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  })).filter((r) => r.campaign_id && r.date_start && r.date_end);
+  if (!rows.length) return { saved: false, notice: "" };
+  try {
+    const { error } = await supabase
+      .from("ads_campaigns")
+      .upsert(rows, { onConflict: "workspace_id,campaign_id,date_start,date_end" });
+    if (error) {
+      if (isAdsCampaignsTableMissing(error)) return { saved: false, notice: "Run migration 003_ads_campaigns.sql to enable the ads_campaigns table." };
+      throw error;
+    }
+    return { saved: true, notice: "" };
+  } catch (err) {
+    if (isAdsCampaignsTableMissing(err)) return { saved: false, notice: "Run migration 003_ads_campaigns.sql to enable the ads_campaigns table." };
+    return { saved: false, notice: String(err?.message || "Failed to save ads campaigns.") };
+  }
+}
+
+export async function loadAdsCampaignsFromSupabase(workspaceId = supabaseWorkspaceId) {
+  if (!supabaseEnabled || !supabase) return { available: false, campaigns: [] };
+  try {
+    const { data, error } = await supabase
+      .from("ads_campaigns")
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .order("imported_at", { ascending: false });
+    if (error) {
+      if (isAdsCampaignsTableMissing(error)) return { available: false, campaigns: [] };
+      throw error;
+    }
+    const campaigns = (data || []).map((row) => ({
+      campaignId: row.campaign_id,
+      campaignName: row.campaign_name || "",
+      dateStart: String(row.date_start || ""),
+      dateEnd: String(row.date_end || ""),
+      spendUsd: Number(row.spend_usd || 0),
+      spendTsh: Number(row.spend_tsh || 0),
+      productId: row.product_id || "",
+      isMapped: Boolean(row.is_mapped),
+      isUnmapped: Boolean(row.is_unmapped),
+      leads: Number(row.leads || 0),
+      savedAt: row.imported_at || null,
+    }));
+    return { available: true, campaigns };
+  } catch {
+    return { available: false, campaigns: [] };
+  }
+}
+
 // ── READ: reconstruct workspace state from normalized tables ─────────────────
 
 function rowToProduct(row) {

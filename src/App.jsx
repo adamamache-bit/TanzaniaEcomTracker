@@ -132,7 +132,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
-import { checkNormalizedTablesEmpty, clearNormalizedProducts, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, syncNormalizedTables } from "./lib/supabaseSync";
+import { checkNormalizedTablesEmpty, clearNormalizedProducts, loadAdsCampaignsFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -1002,7 +1002,8 @@ export default function App() {
   const [ordersTab, setOrdersTab] = useState("pipeline");
   const [shippingTab, setShippingTab] = useState("queue");
 
-  const [_trackingTab, _setTrackingTab] = useState("product-tracking");
+  const [trackingSubTab, setTrackingSubTab] = useState("meta");
+  const [adsCampaignsData, setAdsCampaignsData] = useState({ available: false, campaigns: [], lastLoaded: null });
   const [profitTab, setProfitTab] = useState("overview");
   const [ownerInjectionTzs, setOwnerInjectionTzs] = useState(0);
   const [simProductName, setSimProductName] = useState("");
@@ -2611,7 +2612,7 @@ export default function App() {
   }, [buildCustomerMetricsByProduct, resolvedOperationalCustomers]);
 
   const buildProductDashboardRows = useCallback(
-    (metricsByProduct = {}, trackingRows = [], resolvedCustomers = []) =>
+    (metricsByProduct = {}, trackingRows = [], resolvedCustomers = [], spendByProduct = {}) =>
       products
         .map((product) => {
           const rows = trackingRows.filter((t) => t.productId === product.id);
@@ -2642,10 +2643,14 @@ export default function App() {
           statusCounts: {},
         };
           let spend = 0;
-
           rows.forEach((row) => {
             spend += Number(row.adSpend || 0);
           });
+          // Override with cumulative Meta ads spend when available (persisted across sessions)
+          const cumulativeProductSpend = spendByProduct[product.id];
+          if (cumulativeProductSpend?.spendTsh > 0) {
+            spend = cumulativeProductSpend.spendTsh;
+          }
 
           const deliveredUnits = Number(customerMetrics.deliveredUnits || 0);
         const shippingUnits = Number(customerMetrics.shippingUnits || 0);
@@ -2804,15 +2809,108 @@ export default function App() {
     [products, stockPurchases]
   );
 
+  // Merge saved campaigns from state (always available) and Supabase table (when migrated).
+  // Deduplication key: campaignId + dateStart + dateEnd — prevents double-counting same period.
+  const cumulativeCampaigns = useMemo(() => {
+    const all = [
+      ...(adsCampaignsData.campaigns || []),
+      ...(metaAdsState.savedCampaigns || []),
+    ];
+    const seen = new Set();
+    return all.filter((c) => {
+      const key = `${c.campaignId}::${c.dateStart}::${c.dateEnd}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [adsCampaignsData.campaigns, metaAdsState.savedCampaigns]);
+
+  const cumulativeSpendByProduct = useMemo(() => {
+    const map = {};
+    for (const c of cumulativeCampaigns) {
+      if (!c.productId || c.isUnmapped) continue;
+      if (!map[c.productId]) map[c.productId] = { spendTsh: 0, spendUsd: 0, leads: 0, campaignCount: 0 };
+      map[c.productId].spendTsh += Number(c.spendTsh || 0);
+      map[c.productId].spendUsd += Number(c.spendUsd || 0);
+      map[c.productId].leads += Number(c.leads || 0);
+      map[c.productId].campaignCount += 1;
+    }
+    return map;
+  }, [cumulativeCampaigns]);
+
+  const cumulativeUnmappedSpendTsh = useMemo(
+    () => cumulativeCampaigns.filter((c) => c.isUnmapped || !c.productId).reduce((s, c) => s + Number(c.spendTsh || 0), 0),
+    [cumulativeCampaigns]
+  );
+
+  const totalCumulativeSpendTsh = useMemo(
+    () => cumulativeCampaigns.reduce((s, c) => s + Number(c.spendTsh || 0), 0),
+    [cumulativeCampaigns]
+  );
+
   const productDashboard = useMemo(() => {
-    return buildProductDashboardRows(customerMetricsByProduct, tracking, resolvedOperationalCustomers);
-  }, [buildProductDashboardRows, customerMetricsByProduct, tracking, resolvedOperationalCustomers]);
+    return buildProductDashboardRows(customerMetricsByProduct, tracking, resolvedOperationalCustomers, cumulativeSpendByProduct);
+  }, [buildProductDashboardRows, customerMetricsByProduct, tracking, resolvedOperationalCustomers, cumulativeSpendByProduct]);
 
   const bestProduct = productDashboard[0];
   const productDashboardMap = useMemo(
     () => Object.fromEntries(productDashboard.map((product) => [product.id, product])),
     [productDashboard]
   );
+
+  const cplTrackerRows = useMemo(() => {
+    return products
+      .map((product) => {
+        const cumulative = cumulativeSpendByProduct[product.id] || { spendTsh: 0, spendUsd: 0, leads: 0, campaignCount: 0 };
+        const dashRow = productDashboardMap[product.id] || {};
+        const orders = Number(dashRow.orders || 0);
+        const confirmed = Number(dashRow.confirmed || 0);
+        const delivered = Number(dashRow.deliveredUnits || 0);
+        const leads = cumulative.leads;
+        const spendUsd = cumulative.spendUsd;
+        const spendTsh = cumulative.spendTsh;
+        return {
+          id: product.id,
+          name: product.name,
+          mappingCode: product.mappingCode || product.id,
+          spendTsh,
+          spendUsd,
+          leads,
+          campaignCount: cumulative.campaignCount,
+          orders,
+          confirmed,
+          delivered,
+          cpl: leads > 0 ? spendUsd / leads : 0,
+          cplConfirmed: confirmed > 0 ? spendUsd / confirmed : 0,
+          cplDelivered: delivered > 0 ? spendUsd / delivered : 0,
+          confirmRate: orders > 0 ? confirmed / orders : 0,
+          deliveryRate: confirmed > 0 ? delivered / confirmed : 0,
+        };
+      })
+      .filter((r) => r.spendUsd > 0 || r.leads > 0);
+  }, [products, cumulativeSpendByProduct, productDashboardMap]);
+
+  const cplTrackerGlobal = useMemo(() => {
+    const totalSpendUsd = cplTrackerRows.reduce((s, r) => s + r.spendUsd, 0);
+    const totalSpendTsh = cplTrackerRows.reduce((s, r) => s + r.spendTsh, 0);
+    const totalLeads = cplTrackerRows.reduce((s, r) => s + r.leads, 0);
+    const totalOrders = cplTrackerRows.reduce((s, r) => s + r.orders, 0);
+    const totalConfirmed = cplTrackerRows.reduce((s, r) => s + r.confirmed, 0);
+    const totalDelivered = cplTrackerRows.reduce((s, r) => s + r.delivered, 0);
+    return {
+      totalSpendUsd,
+      totalSpendTsh,
+      totalLeads,
+      totalOrders,
+      totalConfirmed,
+      totalDelivered,
+      cpl: totalLeads > 0 ? totalSpendUsd / totalLeads : 0,
+      cplConfirmed: totalConfirmed > 0 ? totalSpendUsd / totalConfirmed : 0,
+      cplDelivered: totalDelivered > 0 ? totalSpendUsd / totalDelivered : 0,
+      confirmRate: totalOrders > 0 ? totalConfirmed / totalOrders : 0,
+      deliveryRate: totalConfirmed > 0 ? totalDelivered / totalConfirmed : 0,
+    };
+  }, [cplTrackerRows]);
 
   const normalizedTrackingRows = useMemo(() => {
     const today = getTodayString();
@@ -3927,6 +4025,41 @@ export default function App() {
       const importedAt = new Date().toISOString();
       const totalMappedSpendTzs = Object.values(groupedByProduct).reduce((s, e) => s + e.spendTzs, 0);
 
+      // Build campaign records for ALL rows (mapped + unmapped) for cumulative tracking
+      const newCampaignRecords = allMappedRows
+        .filter((row) => Number(row.spend || 0) > 0 && String(row.id || ""))
+        .map((row) => ({
+          campaignId: String(row.id || ""),
+          campaignName: String(row.campaignName || ""),
+          dateStart: metaAdsState.dateStart,
+          dateEnd: metaAdsState.dateEnd,
+          spendUsd: Number(accountCurrency === "TZS" ? 0 : Number(row.spend || 0)),
+          spendTsh: Math.round(convertSpendToTzs(Number(row.spend || 0))),
+          productId: row.mappedProductId || "",
+          isMapped: Boolean(row.mappedProductId),
+          isUnmapped: !row.mappedProductId,
+          leads: Math.max(0, Number(row.trackedLeads ?? row.leads ?? 0)),
+          savedAt: importedAt,
+        }));
+
+      // Merge new records into savedCampaigns, dedup by campaignId::dateStart::dateEnd
+      const existingSaved = metaAdsState.savedCampaigns || [];
+      const savedMap = new Map();
+      for (const c of existingSaved) savedMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
+      for (const c of newCampaignRecords) savedMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
+      const mergedSavedCampaigns = Array.from(savedMap.values());
+
+      // Fire-and-forget save to Supabase
+      if (supabaseEnabled && newCampaignRecords.length) {
+        saveAdsCampaignsToSupabase(newCampaignRecords).catch(() => {});
+        setAdsCampaignsData((prev) => {
+          const sbMap = new Map();
+          for (const c of (prev.campaigns || [])) sbMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
+          for (const c of newCampaignRecords) sbMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
+          return { ...prev, campaigns: Array.from(sbMap.values()), lastLoaded: importedAt };
+        });
+      }
+
       setTracking((prev) => {
         const next = [...prev];
         Object.entries(groupedByProduct).forEach(([productId, stats]) => {
@@ -3974,6 +4107,7 @@ export default function App() {
         ...prev,
         lastSyncAt: importedAt,
         unmappedImportedSpendTzs: Math.round(unmappedSpendTzs),
+        savedCampaigns: mergedSavedCampaigns,
         lastSyncSummary: {
           since: metaAdsState.dateStart,
           until: metaAdsState.dateEnd,
@@ -4003,7 +4137,7 @@ export default function App() {
 
       return true;
     },
-    [metaAdsState.campaignMappings, metaAdsState.dateEnd, metaAdsState.dateStart, products, selectedMetaAccount?.currency]
+    [metaAdsState.campaignMappings, metaAdsState.dateEnd, metaAdsState.dateStart, metaAdsState.savedCampaigns, products, selectedMetaAccount?.currency]
   );
 
   const syncMetaTotalSpend = useCallback(async (options = {}) => {
@@ -4272,6 +4406,14 @@ export default function App() {
     refreshMetaInsights,
     syncMetaTotalSpend,
   ]);
+
+  // Load campaign history from Supabase ads_campaigns table once on mount.
+  useEffect(() => {
+    if (!supabaseEnabled) return;
+    loadAdsCampaignsFromSupabase()
+      .then((result) => setAdsCampaignsData({ ...result, lastLoaded: new Date().toISOString() }))
+      .catch(() => {});
+  }, []);
 
   const submitCloudAuth = async () => {
     const email = cloudAuth.email.trim();
@@ -6278,6 +6420,7 @@ export default function App() {
     const baseRows = productDashboard.map((product) => {
       const adInput = situationData.adInputs?.[product.id] || {};
       const manualAdsUsedTzs = Number(adInput.averageLeadCostTzs || 0) * Number(adInput.incomingLeads || 0);
+      const cumulativeData = cumulativeSpendByProduct[product.id];
       const liveObservedAdsTzs = Number(product.spend || product.totalAdsSpend || 0);
       const stockPurchaseTzs = Number(product.totalProductCostTzs || product.totalProductCost || 0);
       const importChargesTzs = Math.max(0, Number(product.totalImportCost || 0) - stockPurchaseTzs);
@@ -6287,6 +6430,9 @@ export default function App() {
       const totalChargesTzs = productChargesTzs + adsChargesTzs;
       const balanceTzs = Number(product.revenue || 0) - totalChargesTzs;
       const deliveredCount = Number(product.delivered || product.deliveredUnits || 0);
+      const adsSourceLabel = cumulativeData
+        ? `Meta ads — ${cumulativeData.campaignCount} campaign(s)`
+        : liveObservedAdsTzs > 0 ? "Tracking row spend" : manualAdsUsedTzs > 0 ? "Manual ads input" : "No ads input yet";
 
       return {
         ...product,
@@ -6299,13 +6445,13 @@ export default function App() {
         adsChargesTzs,
         totalChargesTzs,
         balanceTzs,
-        adsSourceLabel: liveObservedAdsTzs > 0 ? "Mapped product ads spend" : manualAdsUsedTzs > 0 ? "Manual ads input" : "No ads input yet",
+        adsSourceLabel,
         balancePerOrderTzs: deliveredCount > 0 ? balanceTzs / deliveredCount : 0,
         balanceMarginPercent: Number(product.revenue || 0) > 0 ? (balanceTzs / Number(product.revenue || 0)) * 100 : 0,
       };
     });
     return baseRows.sort((a, b) => Number(b.balanceTzs || 0) - Number(a.balanceTzs || 0));
-  }, [productDashboard, situationData.adInputs]);
+  }, [productDashboard, situationData.adInputs, cumulativeSpendByProduct]);
 
   const auditRows = useMemo(() => {
     return operationalCustomers
@@ -10213,11 +10359,24 @@ export default function App() {
               </div>
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<ClipboardList size={18} />} title="Tracking rows" value={trackingSummary.rows} sub="Manual and Meta-synced spend rows" />
-                <KpiCard icon={<Wallet size={18} />} title="Ad spend" value={formatTZS(trackingSummary.spend)} sub={`${trackingSummary.orders} customer orders synced`} valueColor={accent} />
+                <KpiCard icon={<Wallet size={18} />} title="Cumulative ad spend" value={formatTZS(totalCumulativeSpendTsh || trackingSummary.spend)} sub={totalCumulativeSpendTsh > 0 ? `${cumulativeCampaigns.length} campaigns tracked across all imports` : `${trackingSummary.orders} customer orders synced`} valueColor={accent} />
                 <KpiCard icon={<TrendingUp size={18} />} title="Revenue" value={formatTZS(trackingSummary.revenue)} sub={`${trackingSummary.delivered} delivered units from orders`} valueColor={green} />
                 <KpiCard icon={<Rocket size={18} />} title="Profit" value={formatTZS(trackingSummary.profit)} sub="Orders automate revenue and stock impact" valueColor={trackingSummary.profit >= 0 ? green : red} />
               </div>
 
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {[["meta", "Meta Ads"], ["tracking", "Tracking"], ["cpl", "CPL Tracker"]].map(([id, label]) => (
+                  <button
+                    key={id}
+                    style={{ ...(trackingSubTab === id ? styles.btnPrimary : styles.btnSecondary), borderRadius: 18, padding: "10px 20px" }}
+                    onClick={() => setTrackingSubTab(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {trackingSubTab === "meta" && (
               <div style={{ ...styles.card, padding: 22 }}>
                 <div style={styles.sectionHeader}>
                   <div>
@@ -10481,7 +10640,9 @@ export default function App() {
                 ) : null}
 
               </div>
+              )}
 
+              {trackingSubTab === "tracking" && (
               <div style={{ ...styles.card, padding: 22 }}>
               <div style={styles.sectionHeader}>
                 <div>
@@ -10612,6 +10773,88 @@ export default function App() {
                 {tracking.length === 0 ? <div style={{ color: textSoft }}>No tracking rows yet.</div> : null}
               </div>
               </div>
+              )}
+
+              {trackingSubTab === "cpl" && (
+              <div style={{ ...styles.card, padding: 22 }}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <div style={styles.sectionEyebrow}>Cumulative performance</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>CPL Tracker</div>
+                    <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>
+                      Per-product cost per lead from all imported Meta campaigns. Data accumulates across imports — reimporting the same period updates rather than duplicates.
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                    <div style={{ ...styles.badge, background: "rgba(29,95,208,0.1)", color: accent }}>
+                      {cumulativeCampaigns.length} campaigns total
+                    </div>
+                    <div style={{ fontSize: 12, color: textSoft, fontWeight: 600 }}>
+                      Total: {formatTZS(totalCumulativeSpendTsh)}
+                    </div>
+                  </div>
+                </div>
+
+                {cplTrackerRows.length === 0 ? (
+                  <div style={{ padding: "24px 0", color: textSoft }}>No campaign data yet. Import Meta Ads data first.</div>
+                ) : (
+                  <div style={{ overflowX: "auto", marginTop: 16 }}>
+                    <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+                      <thead>
+                        <tr>
+                          {["Product", "Code", "Spend (USD)", "Spend (TZS)", "Leads", "Confirmed", "Delivered", "CPL (USD)", "CPL Confirmed", "CPL Delivered", "Confirm %", "Delivery %"].map((h) => (
+                            <th key={h} style={{ textAlign: "left", padding: "12px 10px", color: textSoft, fontSize: 11, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", whiteSpace: "nowrap" }}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cplTrackerRows.map((row, i) => (
+                          <tr key={row.id} style={{ background: i % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800 }}>{row.name}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>
+                              <span style={{ ...styles.badge, background: "rgba(29,95,208,0.08)", color: accent, fontFamily: "monospace" }}>{row.mappingCode}</span>
+                            </td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700 }}>{formatUSD(row.spendUsd)}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{formatTZS(Math.round(row.spendTsh))}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.leads}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.confirmed}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.delivered}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: accent, fontWeight: 700 }}>{row.cpl > 0 ? formatUSD(row.cpl) : "—"}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.cplConfirmed > 0 ? formatUSD(row.cplConfirmed) : "—"}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.cplDelivered > 0 ? formatUSD(row.cplDelivered) : "—"}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.confirmRate > 0 ? `${Math.round(row.confirmRate * 100)}%` : "—"}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.deliveryRate > 0 ? `${Math.round(row.deliveryRate * 100)}%` : "—"}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ background: "rgba(247,243,237,0.95)", fontWeight: 900 }}>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}`, fontWeight: 900 }}>TOTAL</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}` }}>—</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}`, color: accent, fontWeight: 900 }}>{formatUSD(cplTrackerGlobal.totalSpendUsd)}</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}` }}>{formatTZS(Math.round(cplTrackerGlobal.totalSpendTsh))}</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}` }}>{cplTrackerGlobal.totalLeads}</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}` }}>{cplTrackerGlobal.totalConfirmed}</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}` }}>{cplTrackerGlobal.totalDelivered}</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}`, color: accent }}>{cplTrackerGlobal.cpl > 0 ? formatUSD(cplTrackerGlobal.cpl) : "—"}</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}` }}>{cplTrackerGlobal.cplConfirmed > 0 ? formatUSD(cplTrackerGlobal.cplConfirmed) : "—"}</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}` }}>{cplTrackerGlobal.cplDelivered > 0 ? formatUSD(cplTrackerGlobal.cplDelivered) : "—"}</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}` }}>{cplTrackerGlobal.confirmRate > 0 ? `${Math.round(cplTrackerGlobal.confirmRate * 100)}%` : "—"}</td>
+                          <td style={{ padding: "14px 10px", borderTop: `2px solid ${cardBorder}` }}>{cplTrackerGlobal.deliveryRate > 0 ? `${Math.round(cplTrackerGlobal.deliveryRate * 100)}%` : "—"}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {cumulativeUnmappedSpendTsh > 0 && (
+                  <div style={{ marginTop: 14, padding: "12px 16px", borderRadius: 14, background: "rgba(199,131,34,0.06)", border: "1px solid rgba(199,131,34,0.18)" }}>
+                    <span style={{ fontWeight: 800, color: amber }}>Unmapped spend: {formatTZS(Math.round(cumulativeUnmappedSpendTsh))}</span>
+                    <span style={{ color: textSoft, fontSize: 13, marginLeft: 10 }}>— campaigns not assigned to any product</span>
+                  </div>
+                )}
+              </div>
+              )}
             </div>
           )}
 
