@@ -471,3 +471,38 @@ export async function loadProfitOverviewFromSupabase() {
     return null;
   }
 }
+
+// ── REVENUE IMPORT: persist Excel-imported revenue totals ─────────────────────
+
+export async function saveRevenueImportToSupabase(data) {
+  if (!supabaseEnabled || !supabase) return false;
+  try {
+    const { error } = await supabase
+      .from("settings")
+      .upsert(
+        { key: "revenue_import", workspace_id: supabaseWorkspaceId, value: data, updated_at: new Date().toISOString() },
+        { onConflict: "key,workspace_id" }
+      );
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    console.error("[RevenueSync] saveRevenueImportToSupabase failed:", err);
+    return false;
+  }
+}
+
+export async function loadRevenueImportFromSupabase() {
+  if (!supabaseEnabled || !supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", "revenue_import")
+      .eq("workspace_id", supabaseWorkspaceId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data.value || null;
+  } catch {
+    return null;
+  }
+}

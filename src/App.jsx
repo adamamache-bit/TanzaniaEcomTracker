@@ -132,7 +132,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
-import { checkNormalizedTablesEmpty, clearNormalizedProducts, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadProfitOverviewFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
+import { checkNormalizedTablesEmpty, clearNormalizedProducts, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadProfitOverviewFromSupabase, loadRevenueImportFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, saveRevenueImportToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -1006,6 +1006,8 @@ export default function App() {
   const [adsCampaignsData, setAdsCampaignsData] = useState({ available: false, campaigns: [], lastLoaded: null });
   const [supabaseAdsSpendByProduct, setSupabaseAdsSpendByProduct] = useState({});
   const [profitOverviewDirect, setProfitOverviewDirect] = useState(null);
+  const [revenueImport, setRevenueImport] = useState(null);
+  const [revenueImportNotice, setRevenueImportNotice] = useState("");
   const [profitTab, setProfitTab] = useState("overview");
   const [ownerInjectionTzs, setOwnerInjectionTzs] = useState(0);
   const [simProductName, setSimProductName] = useState("");
@@ -4435,7 +4437,7 @@ export default function App() {
     syncMetaTotalSpend,
   ]);
 
-  // Load campaign history, per-product spend totals, and profit overview directly from Supabase on mount.
+  // Load campaign history, per-product spend totals, profit overview, and revenue import directly from Supabase on mount.
   useEffect(() => {
     if (!supabaseEnabled) return;
     loadAdsCampaignsFromSupabase()
@@ -4446,6 +4448,9 @@ export default function App() {
       .catch(() => {});
     loadProfitOverviewFromSupabase()
       .then((result) => { if (result) setProfitOverviewDirect(result); })
+      .catch(() => {});
+    loadRevenueImportFromSupabase()
+      .then((result) => { if (result) setRevenueImport(result); })
       .catch(() => {});
   }, []);
 
@@ -4995,6 +5000,67 @@ export default function App() {
       }
     },
     [customers, findMatchingCustomerIndex, importMeta, persistSharedSnapshot, resolveImportedProductId]
+  );
+
+  const importRevenueFromExcel = useCallback(
+    async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      setRevenueImportNotice("Reading file…");
+      try {
+        const buffer = await file.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rawRows = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
+        if (!rawRows.length) { setRevenueImportNotice("File is empty."); return; }
+
+        // Normalize header names once
+        const headerMap = {};
+        Object.keys(rawRows[0]).forEach((key) => { headerMap[normalizeHeaderName(key)] = key; });
+        const getCol = (aliases) => aliases.map((a) => headerMap[a]).find(Boolean);
+
+        const amountCol = getCol(["amount", "total", "total amount", "montant", "prix"]);
+        const shipCol = getCol(["shipping status", "delivery status", "statut livraison", "statut expedition"]);
+        const cityCol = getCol(["city", "ville", "region", "localite"]);
+        const qtyCol = getCol(["quantity", "qty", "quantite", "qte"]);
+
+        const exchangeRate = Number(serviceForm?.exchangeRate || USD_TO_TZS);
+        let revenueTsh = 0;
+        let deliveredCount = 0;
+        let deliveredUnits = 0;
+        let serviceChargesUsd = 0;
+
+        for (const row of rawRows) {
+          const status = shipCol ? String(row[shipCol] || "") : "";
+          if (!isShippingDelivered(status)) continue;
+          revenueTsh += parseLooseNumber(amountCol ? String(row[amountCol] || "0") : "0");
+          const qty = Math.max(1, parseLooseNumber(qtyCol ? String(row[qtyCol] || "1") : "1") || 1);
+          deliveredCount += 1;
+          deliveredUnits += qty;
+          const city = String(cityCol ? row[cityCol] || "" : "").toLowerCase();
+          serviceChargesUsd += qty * (city.includes("dar") ? 8 : 9);
+        }
+
+        const data = {
+          revenueTsh,
+          revenueUsd: revenueTsh / exchangeRate,
+          deliveredCount,
+          deliveredUnits,
+          serviceChargesUsd,
+          importedAt: new Date().toISOString(),
+          rowCount: rawRows.length,
+        };
+        setRevenueImport(data);
+        setRevenueImportNotice(
+          `Revenue updated: ${formatTZS(revenueTsh)} | ${formatUSD(data.revenueUsd)} — ${deliveredCount} delivered orders`
+        );
+        if (supabaseEnabled) saveRevenueImportToSupabase(data).catch(() => {});
+      } catch (err) {
+        setRevenueImportNotice(`Import failed: ${err.message}`);
+      }
+      event.target.value = "";
+    },
+    [serviceForm, supabaseEnabled]
   );
 
   const importShippingFromExcel = useCallback(
@@ -6595,56 +6661,35 @@ export default function App() {
       .filter((p) => String(p.status || "").toLowerCase() === "received")
       .reduce((sum, p) => sum + Number(p.total_landed_cost_usd || 0), 0);
     const productChargesTzs = productChargesUsd * exchangeRate;
-
     const globalExpensesTzs = Number(situationsSummary?.fixedChargesTzs || 0);
 
-    if (profitOverviewDirect) {
-      const { revenueTsh, deliveredUnits, serviceChargesUsd, adsSpendUsd } = profitOverviewDirect;
-      const adsSpendTzs = adsSpendUsd * exchangeRate;
-      const serviceChargesTzs = serviceChargesUsd * exchangeRate;
-      const businessProfitTzs = revenueTsh - productChargesTzs - adsSpendTzs - serviceChargesTzs - globalExpensesTzs;
-      return {
-        revenueTsh,
-        revenueUsd: revenueTsh / exchangeRate,
-        deliveredUnits,
-        productChargesTzs,
-        productChargesUsd,
-        adsSpendTzs,
-        adsSpendUsd,
-        serviceChargesTzs,
-        serviceChargesUsd,
-        globalExpensesTzs,
-        businessProfitTzs,
-        businessProfitUsd: businessProfitTzs / exchangeRate,
-        fromSupabase: true,
-      };
-    }
-    // Fallback: derive from profitCenterRows (in-memory chain)
-    const totals = profitCenterRows.reduce(
-      (acc, row) => {
-        acc.revenueTsh += Number(row.revenue || 0);
-        acc.productChargesTzs += Number(row.productChargesTzs || 0);
-        acc.adsSpendTzs += Number(row.adsChargesTzs || 0);
-        acc.deliveredUnits += Number(row.deliveredUnits || 0);
-        return acc;
-      },
-      { revenueTsh: 0, productChargesTzs: 0, adsSpendTzs: 0, deliveredUnits: 0 }
-    );
-    const serviceChargesTzs = 0;
-    const businessProfitTzs = totals.revenueTsh - totals.productChargesTzs - totals.adsSpendTzs - serviceChargesTzs - globalExpensesTzs;
+    // Revenue source priority: 1) Excel import  2) Supabase orders query  3) profitCenterRows fallback
+    const revenueTsh = revenueImport?.revenueTsh ?? profitOverviewDirect?.revenueTsh ?? profitCenterRows.reduce((s, r) => s + Number(r.revenue || 0), 0);
+    const deliveredUnits = revenueImport?.deliveredUnits ?? profitOverviewDirect?.deliveredUnits ?? profitCenterRows.reduce((s, r) => s + Number(r.deliveredUnits || 0), 0);
+    const serviceChargesUsd = revenueImport?.serviceChargesUsd ?? profitOverviewDirect?.serviceChargesUsd ?? 0;
+    const adsSpendUsd = profitOverviewDirect?.adsSpendUsd ?? profitCenterRows.reduce((s, r) => s + Number(r.adsChargesTzs || 0), 0) / exchangeRate;
+
+    const adsSpendTzs = adsSpendUsd * exchangeRate;
+    const serviceChargesTzs = serviceChargesUsd * exchangeRate;
+    const businessProfitTzs = revenueTsh - productChargesTzs - adsSpendTzs - serviceChargesTzs - globalExpensesTzs;
+
     return {
-      ...totals,
-      revenueUsd: totals.revenueTsh / exchangeRate,
-      productChargesUsd: totals.productChargesTzs / exchangeRate,
-      adsSpendUsd: totals.adsSpendTzs / exchangeRate,
+      revenueTsh,
+      revenueUsd: revenueTsh / exchangeRate,
+      deliveredUnits,
+      productChargesTzs,
+      productChargesUsd,
+      adsSpendTzs,
+      adsSpendUsd,
       serviceChargesTzs,
-      serviceChargesUsd: 0,
+      serviceChargesUsd,
       globalExpensesTzs,
       businessProfitTzs,
       businessProfitUsd: businessProfitTzs / exchangeRate,
-      fromSupabase: false,
+      revenueSource: revenueImport ? "excel" : profitOverviewDirect ? "supabase" : "memory",
+      revenueImportedAt: revenueImport?.importedAt || null,
     };
-  }, [profitOverviewDirect, stockPurchases, serviceForm, situationsSummary, profitCenterRows]);
+  }, [profitOverviewDirect, revenueImport, stockPurchases, serviceForm, situationsSummary, profitCenterRows]);
 
   const profitCenterSummary = useMemo(() => {
     const totals = profitCenterRows.reduce(
@@ -11516,6 +11561,57 @@ export default function App() {
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 16 }}>
                     <KpiCard icon={<TrendingUp size={18} />} title="Business Profit" value={formatUSD(profitOverviewMetrics.businessProfitUsd)} sub={formatTZS(profitOverviewMetrics.businessProfitTzs) + " — revenue minus all charges"} valueColor={profitOverviewMetrics.businessProfitTzs >= 0 ? green : red} />
+                  </div>
+
+                  {/* Revenue Import card */}
+                  <div style={{ ...styles.card, padding: 22 }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                      <div>
+                        <div style={styles.sectionEyebrow}>Revenue Import</div>
+                        <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>Import Excel for Revenue</div>
+                        <div style={{ color: textSoft, fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>
+                          Upload your shipping / leads Excel file. The app reads AMOUNT + SHIPPING STATUS and sums revenue from delivered orders only.
+                        </div>
+                        {profitOverviewMetrics.revenueImportedAt && (
+                          <div style={{ color: textSoft, fontSize: 12, marginTop: 8 }}>
+                            Last import: {new Date(profitOverviewMetrics.revenueImportedAt).toLocaleString()} · {revenueImport?.deliveredCount ?? 0} delivered rows · {revenueImport?.rowCount ?? 0} total rows
+                          </div>
+                        )}
+                      </div>
+                      <label style={{ ...styles.btnPrimary, cursor: "pointer", whiteSpace: "nowrap" }}>
+                        Import Excel for Revenue
+                        <input type="file" accept=".xlsx,.xls" onChange={importRevenueFromExcel} style={{ display: "none" }} />
+                      </label>
+                    </div>
+                    {revenueImportNotice && (
+                      <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: revenueImportNotice.startsWith("Import failed") ? "rgba(239,68,68,0.08)" : "rgba(34,197,94,0.08)", color: revenueImportNotice.startsWith("Import failed") ? red : green, fontSize: 13, fontWeight: 700 }}>
+                        {revenueImportNotice}
+                      </div>
+                    )}
+                    {revenueImport && (
+                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 12, marginTop: 16 }}>
+                        <div style={styles.softStat}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: textSoft, textTransform: "uppercase", letterSpacing: 0.4 }}>Revenue</div>
+                          <div style={{ fontSize: 20, fontWeight: 900, color: green, marginTop: 4 }}>{formatUSD(revenueImport.revenueUsd)}</div>
+                          <div style={{ fontSize: 12, color: textSoft }}>{formatTZS(revenueImport.revenueTsh)}</div>
+                        </div>
+                        <div style={styles.softStat}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: textSoft, textTransform: "uppercase", letterSpacing: 0.4 }}>Delivered Orders</div>
+                          <div style={{ fontSize: 20, fontWeight: 900, marginTop: 4 }}>{revenueImport.deliveredCount}</div>
+                          <div style={{ fontSize: 12, color: textSoft }}>{revenueImport.deliveredUnits} units</div>
+                        </div>
+                        <div style={styles.softStat}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: textSoft, textTransform: "uppercase", letterSpacing: 0.4 }}>Service Charges</div>
+                          <div style={{ fontSize: 20, fontWeight: 900, color: amber, marginTop: 4 }}>{formatUSD(revenueImport.serviceChargesUsd)}</div>
+                          <div style={{ fontSize: 12, color: textSoft }}>{formatTZS(revenueImport.serviceChargesUsd * Number(serviceForm?.exchangeRate || USD_TO_TZS))}</div>
+                        </div>
+                        <div style={styles.softStat}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: textSoft, textTransform: "uppercase", letterSpacing: 0.4 }}>Total Rows</div>
+                          <div style={{ fontSize: 20, fontWeight: 900, marginTop: 4 }}>{revenueImport.rowCount}</div>
+                          <div style={{ fontSize: 12, color: textSoft }}>{revenueImport.rowCount - revenueImport.deliveredCount} non-delivered</div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {liveServiceDataset && (
