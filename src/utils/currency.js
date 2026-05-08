@@ -1,4 +1,4 @@
-export const DEFAULT_EXCHANGE_RATE = 2750;
+export const DEFAULT_EXCHANGE_RATE = 2850;
 
 function toNumber(value) {
   const parsed = Number(value);

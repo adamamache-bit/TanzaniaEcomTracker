@@ -12218,6 +12218,45 @@ export default function App() {
                   </div>
                 </div>
               </div>
+              {/* Business settings — exchange rate */}
+              <div style={{ ...styles.card, padding: 22 }}>
+                <div style={styles.sectionEyebrow}>Business Settings</div>
+                <div style={{ fontSize: 22, fontWeight: 900, marginTop: 6, marginBottom: 4 }}>Exchange Rate</div>
+                <div style={{ color: textSoft, fontSize: 13, marginBottom: 16, lineHeight: 1.5 }}>
+                  Used everywhere: revenue conversion, stock value, ads spend, profit calculations. Default: 2850 TSh / USD.
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>1 USD = ? TSh</label>
+                    <input
+                      style={{ ...styles.input, width: 160 }}
+                      type="number"
+                      min="100"
+                      step="1"
+                      value={serviceForm.exchangeRate}
+                      onChange={(e) => {
+                        const next = { ...serviceForm, exchangeRate: Number(e.target.value) || USD_TO_TZS };
+                        setServiceForm(next);
+                        persistSharedSnapshot({ ...latestSharedStateRef.current, serviceForm: next }, { successNotice: "Exchange rate saved" });
+                      }}
+                    />
+                  </div>
+                  <div style={{ color: textSoft, fontSize: 13, marginTop: 18 }}>
+                    Current: 1 USD = {formatTZS(serviceForm.exchangeRate)} · 1 TSh = {formatUSD(1 / Number(serviceForm.exchangeRate || USD_TO_TZS))}
+                  </div>
+                  <button
+                    style={{ ...styles.btnSecondary, marginTop: 18 }}
+                    onClick={() => {
+                      const next = { ...serviceForm, exchangeRate: 2850 };
+                      setServiceForm(next);
+                      persistSharedSnapshot({ ...latestSharedStateRef.current, serviceForm: next }, { successNotice: "Exchange rate reset to 2850" });
+                    }}
+                  >
+                    Reset to 2850
+                  </button>
+                </div>
+              </div>
+
               <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
                 <KpiCard icon={<LayoutGrid size={18} />} title="Audit Entries" value={auditSummary.totalEntries} sub="Saved history rows" />
                 <KpiCard icon={<ClipboardList size={18} />} title="Import Events" value={auditSummary.imports} sub="Orders or shipping imports" valueColor={accent} />

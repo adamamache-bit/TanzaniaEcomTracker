@@ -95,7 +95,7 @@ export const serviceCountryData = {
   standard: {
     tanzania: {
       label: "Standard Tanzania",
-      usdToTzs: 2750,
+      usdToTzs: DEFAULT_EXCHANGE_RATE,
       serviceFeePercent: 0,
       deliveryFeeUsdPerDelivered: 8.5,
     },
@@ -717,6 +717,7 @@ export function getDefaultMetaAdsState() {
 export function sanitizeServiceForm(value) {
   const totalLeads = Math.max(0, parseLooseNumber(value?.totalLeads));
   const adSpendUsd = Math.max(0, parseLooseNumber(value?.adSpendUsd));
+  const exchangeRate = parseLooseNumber(value?.exchangeRate);
 
   return {
     totalLeads,
@@ -726,6 +727,7 @@ export function sanitizeServiceForm(value) {
     productCostTzs: Math.max(0, parseLooseNumber(value?.productCostTzs)),
     cplUsd: totalLeads > 0 ? adSpendUsd / totalLeads : 0,
     adSpendUsd,
+    exchangeRate: exchangeRate > 0 ? exchangeRate : DEFAULT_EXCHANGE_RATE,
   };
 }
 
