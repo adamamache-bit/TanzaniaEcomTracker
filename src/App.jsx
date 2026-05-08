@@ -132,7 +132,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
-import { checkNormalizedTablesEmpty, clearNormalizedProducts, loadAdsCampaignsFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
+import { checkNormalizedTablesEmpty, clearNormalizedProducts, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -1004,6 +1004,7 @@ export default function App() {
 
   const [trackingSubTab, setTrackingSubTab] = useState("meta");
   const [adsCampaignsData, setAdsCampaignsData] = useState({ available: false, campaigns: [], lastLoaded: null });
+  const [supabaseAdsSpendByProduct, setSupabaseAdsSpendByProduct] = useState({});
   const [profitTab, setProfitTab] = useState("overview");
   const [ownerInjectionTzs, setOwnerInjectionTzs] = useState(0);
   const [simProductName, setSimProductName] = useState("");
@@ -4042,7 +4043,11 @@ export default function App() {
 
       // Persist to Supabase fire-and-forget; also update local adsCampaignsData state
       if (newCampaignRecords.length) {
-        if (supabaseEnabled) saveAdsCampaignsToSupabase(newCampaignRecords).catch(() => {});
+        if (supabaseEnabled) {
+          saveAdsCampaignsToSupabase(newCampaignRecords)
+            .then(() => loadAdsSpendByProductFromSupabase().then(setSupabaseAdsSpendByProduct).catch(() => {}))
+            .catch(() => {});
+        }
         setAdsCampaignsData((prev) => {
           const sbMap = new Map();
           for (const c of (prev.campaigns || [])) sbMap.set(`${c.campaignId}::${c.dateStart}::${c.dateEnd}`, c);
@@ -4426,11 +4431,14 @@ export default function App() {
     syncMetaTotalSpend,
   ]);
 
-  // Load campaign history from Supabase ads_campaigns table once on mount.
+  // Load campaign history and per-product spend totals from Supabase on mount.
   useEffect(() => {
     if (!supabaseEnabled) return;
     loadAdsCampaignsFromSupabase()
       .then((result) => setAdsCampaignsData({ ...result, lastLoaded: new Date().toISOString() }))
+      .catch(() => {});
+    loadAdsSpendByProductFromSupabase()
+      .then(setSupabaseAdsSpendByProduct)
       .catch(() => {});
   }, []);
 
@@ -6439,8 +6447,13 @@ export default function App() {
     const baseRows = productDashboard.map((product) => {
       const adInput = situationData.adInputs?.[product.id] || {};
       const manualAdsUsedTzs = Number(adInput.averageLeadCostTzs || 0) * Number(adInput.incomingLeads || 0);
-      const cumulativeData = cumulativeSpendByProduct[product.id];
-      const liveObservedAdsTzs = Number(product.spend || product.totalAdsSpend || 0);
+      // Primary: direct Supabase query (is_mapped=true, summed by product_id)
+      const sbData = supabaseAdsSpendByProduct[product.id];
+      // Fallback: in-memory cumulative from adsCampaignsData + metaAdsState.savedCampaigns
+      const cumulativeData = sbData || cumulativeSpendByProduct[product.id];
+      const liveObservedAdsTzs = sbData?.spendTsh > 0
+        ? sbData.spendTsh
+        : Number(product.spend || product.totalAdsSpend || 0);
       const stockPurchaseTzs = Number(product.totalProductCostTzs || product.totalProductCost || 0);
       const importChargesTzs = Math.max(0, Number(product.totalImportCost || 0) - stockPurchaseTzs);
       const deliveryChargesTzs = Number(product.serviceFeeTsh || product.totalDeliveryCostTzs || 0);
@@ -6470,7 +6483,7 @@ export default function App() {
       };
     });
     return baseRows.sort((a, b) => Number(b.balanceTzs || 0) - Number(a.balanceTzs || 0));
-  }, [productDashboard, situationData.adInputs, cumulativeSpendByProduct]);
+  }, [productDashboard, situationData.adInputs, cumulativeSpendByProduct, supabaseAdsSpendByProduct]);
 
   const auditRows = useMemo(() => {
     return operationalCustomers

@@ -214,18 +214,51 @@ export async function saveAdsCampaignsToSupabase(campaigns = []) {
     }))
     .filter((r) => r.campaign_id && r.date_start && r.date_end);
   if (!rows.length) return { saved: false, notice: "" };
+  console.log("[AdsSync] Saving", rows.length, "campaign(s) to ads_campaigns:", rows.map((r) => ({ campaign_id: r.campaign_id, product_id: r.product_id, is_mapped: r.is_mapped, spend_usd: r.spend_usd, spend_tsh: r.spend_tsh })));
   try {
     const { error } = await supabase
       .from("ads_campaigns")
       .upsert(rows, { onConflict: "campaign_id,date_start", ignoreDuplicates: false });
     if (error) {
+      console.error("[AdsSync] Save error:", error);
       if (isAdsCampaignsTableMissing(error)) return { saved: false, notice: "Run migration 003_ads_campaigns.sql in your Supabase SQL editor to enable campaign tracking." };
       throw error;
     }
+    console.log("[AdsSync] Save OK —", rows.length, "row(s) upserted");
     return { saved: true, notice: "" };
   } catch (err) {
+    console.error("[AdsSync] Save exception:", err);
     if (isAdsCampaignsTableMissing(err)) return { saved: false, notice: "Run migration 003_ads_campaigns.sql in your Supabase SQL editor to enable campaign tracking." };
     return { saved: false, notice: String(err?.message || "Failed to save ads campaigns.") };
+  }
+}
+
+export async function loadAdsSpendByProductFromSupabase() {
+  if (!supabaseEnabled || !supabase) return {};
+  try {
+    const { data, error } = await supabase
+      .from("ads_campaigns")
+      .select("product_id, spend_usd, spend_tsh, leads")
+      .eq("is_mapped", true);
+    if (error) {
+      if (isAdsCampaignsTableMissing(error)) return {};
+      throw error;
+    }
+    const map = {};
+    for (const row of (data || [])) {
+      const pid = String(row.product_id || "");
+      if (!pid) continue;
+      if (!map[pid]) map[pid] = { spendUsd: 0, spendTsh: 0, leads: 0, campaignCount: 0 };
+      map[pid].spendUsd += Number(row.spend_usd || 0);
+      map[pid].spendTsh += Number(row.spend_tsh || 0);
+      map[pid].leads += Number(row.leads || 0);
+      map[pid].campaignCount += 1;
+    }
+    console.log("[AdsSync] Spend by product from Supabase:", map);
+    return map;
+  } catch (err) {
+    console.error("[AdsSync] loadAdsSpendByProductFromSupabase failed:", err);
+    return {};
   }
 }
 
