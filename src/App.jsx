@@ -132,7 +132,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
-import { checkNormalizedTablesEmpty, clearNormalizedProducts, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
+import { checkNormalizedTablesEmpty, clearNormalizedProducts, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadProfitOverviewFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -1005,6 +1005,7 @@ export default function App() {
   const [trackingSubTab, setTrackingSubTab] = useState("meta");
   const [adsCampaignsData, setAdsCampaignsData] = useState({ available: false, campaigns: [], lastLoaded: null });
   const [supabaseAdsSpendByProduct, setSupabaseAdsSpendByProduct] = useState({});
+  const [profitOverviewDirect, setProfitOverviewDirect] = useState(null);
   const [profitTab, setProfitTab] = useState("overview");
   const [ownerInjectionTzs, setOwnerInjectionTzs] = useState(0);
   const [simProductName, setSimProductName] = useState("");
@@ -4045,7 +4046,10 @@ export default function App() {
       if (newCampaignRecords.length) {
         if (supabaseEnabled) {
           saveAdsCampaignsToSupabase(newCampaignRecords)
-            .then(() => loadAdsSpendByProductFromSupabase().then(setSupabaseAdsSpendByProduct).catch(() => {}))
+            .then(() => Promise.all([
+              loadAdsSpendByProductFromSupabase().then(setSupabaseAdsSpendByProduct).catch(() => {}),
+              loadProfitOverviewFromSupabase().then((r) => { if (r) setProfitOverviewDirect(r); }).catch(() => {}),
+            ]))
             .catch(() => {});
         }
         setAdsCampaignsData((prev) => {
@@ -4431,7 +4435,7 @@ export default function App() {
     syncMetaTotalSpend,
   ]);
 
-  // Load campaign history and per-product spend totals from Supabase on mount.
+  // Load campaign history, per-product spend totals, and profit overview directly from Supabase on mount.
   useEffect(() => {
     if (!supabaseEnabled) return;
     loadAdsCampaignsFromSupabase()
@@ -4439,6 +4443,9 @@ export default function App() {
       .catch(() => {});
     loadAdsSpendByProductFromSupabase()
       .then(setSupabaseAdsSpendByProduct)
+      .catch(() => {});
+    loadProfitOverviewFromSupabase()
+      .then((result) => { if (result) setProfitOverviewDirect(result); })
       .catch(() => {});
   }, []);
 
@@ -6579,6 +6586,65 @@ export default function App() {
         .includes(searchValue)
     );
   }, [auditRows, deferredAuditSearch]);
+
+  // Direct Supabase aggregates for the Overview tab — bypasses the full React state chain.
+  const profitOverviewMetrics = useMemo(() => {
+    const exchangeRate = Number(serviceForm?.exchangeRate || USD_TO_TZS);
+    // Product charges: in-memory stockPurchases (loaded from Supabase workspace blob)
+    const productChargesUsd = stockPurchases
+      .filter((p) => String(p.status || "").toLowerCase() === "received")
+      .reduce((sum, p) => sum + Number(p.total_landed_cost_usd || 0), 0);
+    const productChargesTzs = productChargesUsd * exchangeRate;
+
+    const globalExpensesTzs = Number(situationsSummary?.fixedChargesTzs || 0);
+
+    if (profitOverviewDirect) {
+      const { revenueTsh, deliveredUnits, serviceChargesUsd, adsSpendUsd } = profitOverviewDirect;
+      const adsSpendTzs = adsSpendUsd * exchangeRate;
+      const serviceChargesTzs = serviceChargesUsd * exchangeRate;
+      const businessProfitTzs = revenueTsh - productChargesTzs - adsSpendTzs - serviceChargesTzs - globalExpensesTzs;
+      return {
+        revenueTsh,
+        revenueUsd: revenueTsh / exchangeRate,
+        deliveredUnits,
+        productChargesTzs,
+        productChargesUsd,
+        adsSpendTzs,
+        adsSpendUsd,
+        serviceChargesTzs,
+        serviceChargesUsd,
+        globalExpensesTzs,
+        businessProfitTzs,
+        businessProfitUsd: businessProfitTzs / exchangeRate,
+        fromSupabase: true,
+      };
+    }
+    // Fallback: derive from profitCenterRows (in-memory chain)
+    const totals = profitCenterRows.reduce(
+      (acc, row) => {
+        acc.revenueTsh += Number(row.revenue || 0);
+        acc.productChargesTzs += Number(row.productChargesTzs || 0);
+        acc.adsSpendTzs += Number(row.adsChargesTzs || 0);
+        acc.deliveredUnits += Number(row.deliveredUnits || 0);
+        return acc;
+      },
+      { revenueTsh: 0, productChargesTzs: 0, adsSpendTzs: 0, deliveredUnits: 0 }
+    );
+    const serviceChargesTzs = 0;
+    const businessProfitTzs = totals.revenueTsh - totals.productChargesTzs - totals.adsSpendTzs - serviceChargesTzs - globalExpensesTzs;
+    return {
+      ...totals,
+      revenueUsd: totals.revenueTsh / exchangeRate,
+      productChargesUsd: totals.productChargesTzs / exchangeRate,
+      adsSpendUsd: totals.adsSpendTzs / exchangeRate,
+      serviceChargesTzs,
+      serviceChargesUsd: 0,
+      globalExpensesTzs,
+      businessProfitTzs,
+      businessProfitUsd: businessProfitTzs / exchangeRate,
+      fromSupabase: false,
+    };
+  }, [profitOverviewDirect, stockPurchases, serviceForm, situationsSummary, profitCenterRows]);
 
   const profitCenterSummary = useMemo(() => {
     const totals = profitCenterRows.reduce(
@@ -11440,13 +11506,16 @@ export default function App() {
 
               {profitTab === "overview" && (
                 <div style={{ display: "grid", gap: 16 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(6, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
-                    <KpiCard icon={<Wallet size={18} />} title="Revenue" value={formatUsdFromTzs(profitCenterSummary.revenueTzs)} sub="Delivered orders only" valueColor={green} />
-                    <KpiCard icon={<Archive size={18} />} title="Product Charges" value={formatUsdFromTzs(profitCenterSummary.productChargesTzs)} sub="Stock + import + delivery fees" valueColor={amber} />
-                    <KpiCard icon={<ClipboardList size={18} />} title="Ads Charges" value={formatUsdFromTzs(profitCenterSummary.adsSpendTzs)} sub={profitCenterSummary.adsSourceLabel} valueColor={amber} />
-                    <KpiCard icon={<Users size={18} />} title="Global Expenses" value={formatUsdFromTzs(Number(situationsSummary.fixedChargesTzs || 0))} sub="Salaries + fixed charges (not allocated to products)" valueColor={amber} />
-                    <KpiCard icon={<TrendingUp size={18} />} title="Business Profit" value={formatUsdFromTzs(profitCenterSummary.balanceTzs - Number(situationsSummary.fixedChargesTzs || 0))} sub="Revenue minus all charges and global expenses" valueColor={(profitCenterSummary.balanceTzs - Number(situationsSummary.fixedChargesTzs || 0)) >= 0 ? green : red} />
-                    <KpiCard icon={<Boxes size={18} />} title="Profitable Products" value={profitCenterSummary.profitableProducts} sub={`${profitCenterRows.length} products tracked`} />
+                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
+                    <KpiCard icon={<Wallet size={18} />} title="Revenue" value={formatUSD(profitOverviewMetrics.revenueUsd)} sub={formatTZS(profitOverviewMetrics.revenueTsh) + " — delivered orders"} valueColor={green} />
+                    <KpiCard icon={<Archive size={18} />} title="Product Charges" value={formatUSD(profitOverviewMetrics.productChargesUsd)} sub={formatTZS(profitOverviewMetrics.productChargesTzs) + " — received stock only"} valueColor={amber} />
+                    <KpiCard icon={<ClipboardList size={18} />} title="Ads Charges" value={formatUSD(profitOverviewMetrics.adsSpendUsd)} sub={formatTZS(profitOverviewMetrics.adsSpendTzs) + " — all campaigns"} valueColor={amber} />
+                    <KpiCard icon={<Boxes size={18} />} title="Delivered Units" value={profitOverviewMetrics.deliveredUnits} sub="Quantity from delivered orders" />
+                    <KpiCard icon={<TrendingUp size={18} />} title="Service Charges" value={formatUSD(profitOverviewMetrics.serviceChargesUsd)} sub={formatTZS(profitOverviewMetrics.serviceChargesTzs) + " — delivery fees"} valueColor={amber} />
+                    <KpiCard icon={<Users size={18} />} title="Global Expenses" value={formatUSD(profitOverviewMetrics.globalExpensesTzs / (Number(serviceForm?.exchangeRate || USD_TO_TZS)))} sub={formatTZS(profitOverviewMetrics.globalExpensesTzs) + " — salaries + fixed charges"} valueColor={amber} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 16 }}>
+                    <KpiCard icon={<TrendingUp size={18} />} title="Business Profit" value={formatUSD(profitOverviewMetrics.businessProfitUsd)} sub={formatTZS(profitOverviewMetrics.businessProfitTzs) + " — revenue minus all charges"} valueColor={profitOverviewMetrics.businessProfitTzs >= 0 ? green : red} />
                   </div>
 
                   {liveServiceDataset && (

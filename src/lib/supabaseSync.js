@@ -1,4 +1,5 @@
 import { supabase, supabaseEnabled, supabaseWorkspaceId } from "./supabaseClient";
+import { isDeliveredStatus } from "../config/statusMapping";
 
 export async function checkNormalizedTablesEmpty(workspaceId = supabaseWorkspaceId) {
   if (!supabaseEnabled || !supabase) return true;
@@ -435,4 +436,38 @@ export async function migrateWorkspaceToNormalizedTables(
     },
     errors,
   };
+}
+
+// ── PROFIT OVERVIEW: direct Supabase aggregate for the Overview tab ───────────
+
+export async function loadProfitOverviewFromSupabase() {
+  if (!supabaseEnabled || !supabase) return null;
+  try {
+    const [ordersResult, adsResult] = await Promise.all([
+      supabase.from("orders").select("quantity, amount_tsh, order_total_tzs, city, shipping_status"),
+      supabase.from("ads_campaigns").select("spend_usd"),
+    ]);
+
+    let revenueTsh = 0;
+    let deliveredUnits = 0;
+    let serviceChargesUsd = 0;
+
+    for (const row of (ordersResult.data || [])) {
+      if (!isDeliveredStatus(row.shipping_status)) continue;
+      const qty = Math.max(1, Number(row.quantity || 1));
+      revenueTsh += Number(row.amount_tsh || row.order_total_tzs || 0);
+      deliveredUnits += qty;
+      const city = String(row.city || "").toLowerCase();
+      const isDar = city.includes("dar");
+      serviceChargesUsd += qty * (isDar ? 8 : 9);
+    }
+
+    const adsSpendUsd = (adsResult.data || []).reduce((sum, row) => sum + Number(row.spend_usd || 0), 0);
+
+    console.log("[ProfitSync] Overview from Supabase:", { revenueTsh, deliveredUnits, serviceChargesUsd, adsSpendUsd });
+    return { revenueTsh, deliveredUnits, serviceChargesUsd, adsSpendUsd };
+  } catch (err) {
+    console.error("[ProfitSync] loadProfitOverviewFromSupabase failed:", err);
+    return null;
+  }
 }
