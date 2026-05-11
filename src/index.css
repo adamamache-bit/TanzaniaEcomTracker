@@ -72,3 +72,181 @@ textarea:focus {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(35, 88, 213, 0.45);
 }
+
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   RESPONSIVE LAYOUT FIXES
+   Fixes: tables overflowing, tabs hiding, grid overflow,
+   content clipping at 75 / 100 / 125% browser zoom.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+/*
+  Critical: grid/flex children default to min-width:auto which
+  lets them expand beyond their container. 0 fixes overflow.
+*/
+[style*="display: grid"] > *,
+[style*="display:grid"] > *,
+[style*="display: flex"] > *,
+[style*="display:flex"] > * {
+  min-width: 0;
+}
+
+/*
+  Tables: always render at their natural (content) width so the
+  parent's overflow-x:auto scroll container kicks in correctly.
+*/
+table {
+  min-width: max-content;
+  width: 100%;
+}
+
+/*
+  Table cells: long numbers/strings wrap instead of breaking layout.
+*/
+td {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 260px;
+}
+
+th {
+  white-space: nowrap;
+}
+
+/*
+  All horizontal-scroll containers: enable touch scroll on mobile.
+*/
+[style*="overflow-x: auto"],
+[style*="overflow-x:auto"] {
+  -webkit-overflow-scrolling: touch;
+}
+
+/*
+  Tabs row (InlineTabs): scroll horizontally instead of wrapping.
+  Class added in the InlineTabs component.
+*/
+.tabs-row {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  gap: 10px;
+  padding-bottom: 4px;
+  /* hide scrollbar on desktop; still scrollable */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(102, 112, 133, 0.25) transparent;
+}
+
+.tabs-row::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tabs-row::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tabs-row::-webkit-scrollbar-thumb {
+  background: rgba(102, 112, 133, 0.3);
+  border-radius: 4px;
+}
+
+/*
+  Tab buttons inside tabs-row: never shrink below their text width.
+*/
+.tabs-row > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/*
+  Inputs and selects: never overflow their grid/flex cell.
+*/
+input,
+select,
+textarea {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/*
+  Buttons inside forms: don't overflow.
+*/
+button {
+  max-width: 100%;
+}
+
+/*
+  Field blocks (label + input): shrink gracefully.
+*/
+[style*="flex-direction: column"] {
+  min-width: 0;
+}
+
+/*
+  KPI card value text: break long numbers gracefully.
+*/
+.kpi-value-text {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
+}
+
+/*
+  Sidebar: at narrow effective widths (high zoom or small monitor),
+  allow the sidebar to scroll vertically if content overflows.
+*/
+aside {
+  overflow-y: auto;
+}
+
+/*
+  Navigation items: label text truncates with ellipsis if too narrow.
+*/
+.nav-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+  Prevent any single content block from forcing the page wider.
+*/
+main {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/*
+  Cards stacking: add gap when cards wrap into single column.
+*/
+[style*="gridTemplateColumns"] {
+  row-gap: inherit;
+}
+
+/*
+  At zoom levels that effectively narrow the viewport below 640px,
+  ensure single-column layout for forms and cards.
+*/
+@media (max-width: 640px) {
+  [style*="gridTemplateColumns: 1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/*
+  Thin horizontal scrollbar for overflow-x:auto containers (tables etc.)
+*/
+[style*="overflow-x: auto"]::-webkit-scrollbar {
+  height: 6px;
+}
+
+[style*="overflow-x: auto"]::-webkit-scrollbar-thumb {
+  background: rgba(102, 112, 133, 0.35);
+  border-radius: 6px;
+}
+
+[style*="overflow-x: auto"]::-webkit-scrollbar-track {
+  background: rgba(217, 225, 236, 0.3);
+  border-radius: 6px;
+}

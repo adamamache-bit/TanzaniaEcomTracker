@@ -409,7 +409,7 @@ const styles = {
     fontFamily: "\"Segoe UI Variable Text\", \"Segoe UI\", Arial, sans-serif",
     overflowX: "hidden",
   },
-  layout: { display: "grid", gridTemplateColumns: "236px 1fr", minHeight: "100vh", maxWidth: "100%", overflowX: "hidden" },
+  layout: { display: "grid", gridTemplateColumns: "236px 1fr", minHeight: "100vh", maxWidth: "100%" },
   sidebar: {
     background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(246,249,252,0.96))",
     borderRight: `1px solid ${cardBorder}`,
@@ -418,10 +418,13 @@ const styles = {
     position: "sticky",
     top: 0,
     alignSelf: "start",
-    height: "100vh",
+    height: "100dvh",
+    maxHeight: "100vh",
     overflowY: "auto",
+    overflowX: "hidden",
+    minWidth: 0,
   },
-  main: { padding: 22, minWidth: 0, overflowX: "hidden" },
+  main: { padding: 22, minWidth: 0 },
   topbar: {
     display: "grid",
     gap: 16,
@@ -620,7 +623,7 @@ function SidebarItem({ active, icon, label, onClick }) {
       >
         {icon}
       </span>
-      <span>{label}</span>
+      <span className="nav-label">{label}</span>
     </button>
   );
 }
@@ -655,8 +658,8 @@ function KpiCard({ icon, title, value, sub, valueColor = textMain }) {
           {icon}
         </div>
       </div>
-      <div style={{ fontSize: 22, fontWeight: 900, color: valueColor, whiteSpace: "normal", wordBreak: "keep-all", lineHeight: "1.05" }}>{value}</div>
-      <div style={{ marginTop: 7, color: textSoft, fontSize: 12, lineHeight: 1.45 }}>{sub}</div>
+      <div className="kpi-value-text" style={{ fontSize: 22, fontWeight: 900, color: valueColor, lineHeight: "1.05" }}>{value}</div>
+      <div style={{ marginTop: 7, color: textSoft, fontSize: 12, lineHeight: 1.45, overflowWrap: "break-word" }}>{sub}</div>
     </div>
   );
 }
@@ -761,12 +764,12 @@ function MetaDateRangePicker({ value, onApply, responsiveColumns }) {
           <span>{monthDate.getFullYear()}</span>
           <ChevronDown size={14} />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, color: textSoft, fontSize: 12, textAlign: "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(28px, 1fr))", gap: 6, color: textSoft, fontSize: 12, textAlign: "center" }}>
           {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
             <div key={day}>{day}</div>
           ))}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(28px, 1fr))", gap: 6 }}>
           {days.map((day) => {
             const dateString = formatDateInput(day);
             const isCurrentMonth = day.getMonth() === currentMonth;
@@ -2466,12 +2469,12 @@ export default function App() {
   const responsiveColumns = useCallback(
     (desktop, tablet = "1fr 1fr", mobile = "1fr") => {
       if (viewportWidth <= 640) return mobile;
-      if (viewportWidth <= 1024) return tablet;
+      if (viewportWidth <= 1100) return tablet;
       return desktop;
     },
     [viewportWidth]
   );
-  const isCompact = viewportWidth <= 1024;
+  const isCompact = viewportWidth <= 1100;
 
   const buildOperationalCustomerKeys = useCallback((customer) => {
     if (!customer) return [];
@@ -11251,7 +11254,7 @@ export default function App() {
                     <div style={styles.sectionEyebrow}>Simulation inputs</div>
                     <div style={{ fontSize: 22, fontWeight: 900, marginTop: 8 }}>Enter your product scenario</div>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 10 }}>
                     <select style={styles.input} value={selectedService} onChange={(e) => setSelectedService(e.target.value)}>
                       <option value="standard">Standard</option>
                       <option value="codzoss">CODZOSS</option>
@@ -12831,7 +12834,7 @@ function PageHeader({ eyebrow = null, title, description, filters = null, action
 
 function InlineTabs({ items, value, onChange }) {
   return (
-    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+    <div className="tabs-row">
       {items.map((item) => (
         <button
           key={item.value}
