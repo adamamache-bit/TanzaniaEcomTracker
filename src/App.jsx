@@ -132,7 +132,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
-import { checkNormalizedTablesEmpty, clearNormalizedProducts, deleteExtraChargeFromSupabase, deleteManualAdsSpendFromSupabase, deleteOwnerInjectionFromSupabase, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadExtraChargesFromSupabase, loadManualAdsSpendFromSupabase, loadOwnerInjectionsFromSupabase, loadProfitOverviewFromSupabase, loadRevenueImportFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, saveExtraChargeToSupabase, saveManualAdsSpendToSupabase, saveOwnerInjectionToSupabase, saveRevenueImportToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
+import { checkNormalizedTablesEmpty, clearNormalizedProducts, deleteExtraChargeFromSupabase, deleteManualAdsSpendFromSupabase, deleteOwnerInjectionFromSupabase, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadExtraChargesFromSupabase, loadManualAdsSpendFromSupabase, loadOwnerInjectionsFromSupabase, loadProfitOverviewFromSupabase, loadRevenueImportFromSupabase, loadRevenueImportRowsFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, saveExtraChargeToSupabase, saveManualAdsSpendToSupabase, saveOwnerInjectionToSupabase, saveRevenueImportRowsToSupabase, saveRevenueImportToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -1007,6 +1007,7 @@ export default function App() {
   const [supabaseAdsSpendByProduct, setSupabaseAdsSpendByProduct] = useState({});
   const [profitOverviewDirect, setProfitOverviewDirect] = useState(null);
   const [revenueImport, setRevenueImport] = useState(null);
+  const [revenueImportRows, setRevenueImportRows] = useState({});
   const [revenueImportNotice, setRevenueImportNotice] = useState("");
   const [manualAdsSpend, setManualAdsSpend] = useState([]);
   const [manualAdsForm, setManualAdsForm] = useState({ weekStart: "", weekEnd: "", productId: "", productName: "", amountUsd: "", notes: "" });
@@ -4517,6 +4518,7 @@ export default function App() {
     loadRevenueImportFromSupabase()
       .then((result) => { if (result) setRevenueImport(result); })
       .catch(() => {});
+    loadRevenueImportRowsFromSupabase().then(setRevenueImportRows).catch(() => {});
     loadManualAdsSpendFromSupabase().then(setManualAdsSpend).catch(() => {});
     loadExtraChargesFromSupabase().then(setExtraCharges).catch(() => {});
     loadOwnerInjectionsFromSupabase().then(setOwnerInjections).catch(() => {});
@@ -5107,26 +5109,50 @@ export default function App() {
         Object.keys(rawRows[0]).forEach((key) => { headerMap[normalizeHeaderName(key)] = key; });
         const getCol = (aliases) => aliases.map((a) => headerMap[a]).find(Boolean);
 
+        const codeCol = getCol(["code", "order id", "orderid", "order no", "reference", "ref"]);
         const amountCol = getCol(["amount", "total", "total amount", "montant", "prix"]);
         const shipCol = getCol(["shipping status", "delivery status", "statut livraison", "statut expedition"]);
         const cityCol = getCol(["city", "ville", "region", "localite"]);
         const qtyCol = getCol(["quantity", "qty", "quantite", "qte"]);
 
         const exchangeRate = Number(serviceForm?.exchangeRate || USD_TO_TZS);
+
+        // Start with the existing rows map (deduplicate by CODE)
+        const mergedRows = { ...revenueImportRows };
+        let newCount = 0;
+        let updatedCount = 0;
+        let _skippedNoCode = 0;
+        const importedAt = new Date().toISOString();
+
+        for (const row of rawRows) {
+          const code = codeCol ? String(row[codeCol] || "").trim() : "";
+          if (!code) { _skippedNoCode++; continue; }
+
+          const amountTsh = parseLooseNumber(amountCol ? String(row[amountCol] || "0") : "0");
+          const status = shipCol ? String(row[shipCol] || "") : "";
+          const city = cityCol ? String(row[cityCol] || "") : "";
+          const qty = Math.max(1, parseLooseNumber(qtyCol ? String(row[qtyCol] || "1") : "1") || 1);
+
+          if (mergedRows[code]) {
+            updatedCount++;
+          } else {
+            newCount++;
+          }
+          mergedRows[code] = { amount_tsh: amountTsh, status, city, qty, imported_at: importedAt };
+        }
+
+        // Recalculate totals from ALL stored rows (delivered only) — prevents any double-counting
         let revenueTsh = 0;
         let deliveredCount = 0;
         let deliveredUnits = 0;
         let serviceChargesUsd = 0;
-
-        for (const row of rawRows) {
-          const status = shipCol ? String(row[shipCol] || "") : "";
-          if (!isShippingDelivered(status)) continue;
-          revenueTsh += parseLooseNumber(amountCol ? String(row[amountCol] || "0") : "0");
-          const qty = Math.max(1, parseLooseNumber(qtyCol ? String(row[qtyCol] || "1") : "1") || 1);
-          deliveredCount += 1;
+        for (const r of Object.values(mergedRows)) {
+          if (!isShippingDelivered(r.status)) continue;
+          revenueTsh += Number(r.amount_tsh || 0);
+          const qty = Math.max(1, Number(r.qty || 1));
+          deliveredCount++;
           deliveredUnits += qty;
-          const city = String(cityCol ? row[cityCol] || "" : "").toLowerCase();
-          serviceChargesUsd += qty * (city.includes("dar") ? 8 : 9);
+          serviceChargesUsd += qty * (String(r.city || "").toLowerCase().includes("dar") ? 8 : 9);
         }
 
         const data = {
@@ -5135,20 +5161,28 @@ export default function App() {
           deliveredCount,
           deliveredUnits,
           serviceChargesUsd,
-          importedAt: new Date().toISOString(),
+          importedAt,
           rowCount: rawRows.length,
+          totalStoredOrders: Object.keys(mergedRows).length,
+          lastImportNewCount: newCount,
+          lastImportUpdatedCount: updatedCount,
         };
+
+        setRevenueImportRows(mergedRows);
         setRevenueImport(data);
         setRevenueImportNotice(
-          `Revenue updated: ${formatTZS(revenueTsh)} | ${formatUSD(data.revenueUsd)} — ${deliveredCount} delivered orders`
+          `Last import: ${new Date().toLocaleDateString()} — ${newCount} new orders added, ${updatedCount} orders updated, ${deliveredCount} total delivered`
         );
-        if (supabaseEnabled) saveRevenueImportToSupabase(data).catch(() => {});
+        if (supabaseEnabled) {
+          saveRevenueImportRowsToSupabase(mergedRows).catch(() => {});
+          saveRevenueImportToSupabase(data).catch(() => {});
+        }
       } catch (err) {
         setRevenueImportNotice(`Import failed: ${err.message}`);
       }
       event.target.value = "";
     },
-    [serviceForm]
+    [serviceForm, revenueImportRows]
   );
 
   const importShippingFromExcel = useCallback(
@@ -11762,8 +11796,13 @@ export default function App() {
                         <div>
                           <div style={styles.sectionEyebrow}>Revenue Source</div>
                           <div style={{ fontSize: 18, fontWeight: 900, marginTop: 6 }}>Import Excel for Revenue</div>
-                          <div style={{ color: textSoft, fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>Upload shipping / leads Excel. Reads AMOUNT + SHIPPING STATUS, sums delivered orders only.</div>
-                          {m.revenueImportedAt && <div style={{ color: textSoft, fontSize: 12, marginTop: 6 }}>Last import: {new Date(m.revenueImportedAt).toLocaleString()} · {revenueImport?.deliveredCount ?? 0} delivered · {revenueImport?.rowCount ?? 0} total rows</div>}
+                          <div style={{ color: textSoft, fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>Upload shipping / leads Excel. Uses CODE column as unique key — re-importing the same file never duplicates orders.</div>
+                          {m.revenueImportedAt && (
+                            <div style={{ color: textSoft, fontSize: 12, marginTop: 6 }}>
+                              Last import: {new Date(m.revenueImportedAt).toLocaleDateString()} — {revenueImport?.lastImportNewCount ?? 0} new orders added, {revenueImport?.lastImportUpdatedCount ?? 0} orders updated, {revenueImport?.deliveredCount ?? 0} total delivered
+                              {revenueImport?.totalStoredOrders ? ` · ${revenueImport.totalStoredOrders} orders tracked total` : ""}
+                            </div>
+                          )}
                         </div>
                         <label style={{ ...styles.btnPrimary, cursor: "pointer", whiteSpace: "nowrap" }}>
                           Import Excel
