@@ -132,7 +132,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
-import { checkNormalizedTablesEmpty, clearNormalizedProducts, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadProfitOverviewFromSupabase, loadRevenueImportFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, saveRevenueImportToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
+import { checkNormalizedTablesEmpty, clearNormalizedProducts, deleteExtraChargeFromSupabase, deleteManualAdsSpendFromSupabase, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadExtraChargesFromSupabase, loadManualAdsSpendFromSupabase, loadProfitOverviewFromSupabase, loadRevenueImportFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, saveExtraChargeToSupabase, saveManualAdsSpendToSupabase, saveRevenueImportToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -1008,6 +1008,12 @@ export default function App() {
   const [profitOverviewDirect, setProfitOverviewDirect] = useState(null);
   const [revenueImport, setRevenueImport] = useState(null);
   const [revenueImportNotice, setRevenueImportNotice] = useState("");
+  const [manualAdsSpend, setManualAdsSpend] = useState([]);
+  const [manualAdsForm, setManualAdsForm] = useState({ weekStart: "", weekEnd: "", productId: "", productName: "", amountUsd: "", notes: "" });
+  const [manualAdsNotice, setManualAdsNotice] = useState("");
+  const [extraCharges, setExtraCharges] = useState([]);
+  const [extraChargesForm, setExtraChargesForm] = useState({ date: "", category: "other", description: "", amountUsd: "", amountTsh: "" });
+  const [extraChargesNotice, setExtraChargesNotice] = useState("");
   const [profitTab, setProfitTab] = useState("overview");
   const [ownerInjectionTzs, setOwnerInjectionTzs] = useState(0);
   const [simProductName, setSimProductName] = useState("");
@@ -2137,23 +2143,6 @@ export default function App() {
     };
   }, [applySharedStateSnapshot, cloudAuth.user, persistSharedSnapshot]);
 
-  const persistProductsSnapshot = useCallback(
-    async (nextProducts, notice = "Cloud product catalog synced") => {
-      const nextSnapshot = {
-        ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
-        products: nextProducts.map(sanitizeProductRecord),
-      };
-
-      latestSharedStateRef.current = nextSnapshot;
-      return persistSharedSnapshot(nextSnapshot, {
-        progressNotice: "Saving product changes to cloud...",
-        successNotice: notice,
-        failurePrefix: "Cloud product sync failed",
-      });
-    },
-    [persistSharedSnapshot]
-  );
-
   const persistStockSnapshot = useCallback(
     async (nextPurchases, nextMovements) => {
       const nextSnapshot = {
@@ -2169,6 +2158,80 @@ export default function App() {
       });
     },
     [persistSharedSnapshot]
+  );
+
+  const getManualSeedPurchaseId = useCallback((productId) => `manual-stock-${productId}`, []);
+
+  const upsertManualSeedStockPurchase = useCallback(
+    (currentPurchases, productRecord) => {
+      if (!productRecord?.id) return currentPurchases;
+
+      const productId = productRecord.id;
+      const manualSeedId = getManualSeedPurchaseId(productId);
+      const exchangeRate = Number(serviceForm?.exchangeRate || USD_TO_TZS) || USD_TO_TZS;
+      const quantity = Math.max(0, Number(productRecord.totalQty || 0));
+      const sourceCountry = String(productRecord.source || "china").toLowerCase();
+      const nowIso = new Date().toISOString();
+      const today = getTodayString();
+      const existingSeed = currentPurchases.find((purchase) => purchase.id === manualSeedId) || null;
+      const hasRealPurchases = currentPurchases.some(
+        (purchase) => purchase.product_id === productId && purchase.id !== manualSeedId
+      );
+
+      if (hasRealPurchases) {
+        return existingSeed
+          ? currentPurchases.filter((purchase) => purchase.id !== manualSeedId)
+          : currentPurchases;
+      }
+
+      if (quantity <= 0) {
+        return existingSeed
+          ? currentPurchases.filter((purchase) => purchase.id !== manualSeedId)
+          : currentPurchases;
+      }
+
+      const shippingCostUsd = Math.max(0, Number(productRecord.shippingTotal || 0) / exchangeRate);
+      const otherChargesTsh = Math.max(0, Number(productRecord.otherCharges || 0));
+      const otherChargesUsd = otherChargesTsh > 0 ? otherChargesTsh / exchangeRate : 0;
+      const buyPricePerUnitUsd = Math.max(0, Number(productRecord.purchaseUnitPrice || 0));
+      const totalBuyCostUsd = buyPricePerUnitUsd * quantity;
+      const totalLandedCostUsd =
+        totalBuyCostUsd +
+        shippingCostUsd +
+        Math.max(0, Number(productRecord.sourcingCostUsd || 0)) +
+        otherChargesUsd;
+
+      const seedPurchase = {
+        id: manualSeedId,
+        product_id: productId,
+        quantity_ordered: quantity,
+        quantity_received: quantity,
+        source_country: sourceCountry,
+        supplier_name: productRecord.supplierName || "",
+        purchase_date: existingSeed?.purchase_date || productRecord.stockOrderedAt || today,
+        expected_arrival_date: "",
+        usable_stock_date: existingSeed?.usable_stock_date || productRecord.stockArrivedAt || today,
+        buy_price_per_unit_usd: buyPricePerUnitUsd,
+        shipping_cost_usd: shippingCostUsd,
+        sourcing_cost_usd: Math.max(0, Number(productRecord.sourcingCostUsd || 0)),
+        other_charges_tsh: otherChargesTsh,
+        other_charges_usd: otherChargesUsd,
+        total_buy_cost_usd: totalBuyCostUsd,
+        total_landed_cost_usd: totalLandedCostUsd,
+        landed_cost_per_unit_usd: quantity > 0 ? totalLandedCostUsd / quantity : 0,
+        status: "received",
+        notes: "Auto-generated from product stock quantity",
+        created_at: existingSeed?.created_at || nowIso,
+        updated_at: nowIso,
+      };
+
+      if (existingSeed) {
+        return currentPurchases.map((purchase) => (purchase.id === manualSeedId ? seedPurchase : purchase));
+      }
+
+      return [...currentPurchases, seedPurchase];
+    },
+    [getManualSeedPurchaseId, serviceForm]
   );
 
   const addStockMovement = useCallback((movement, currentMovements) => {
@@ -4452,6 +4515,8 @@ export default function App() {
     loadRevenueImportFromSupabase()
       .then((result) => { if (result) setRevenueImport(result); })
       .catch(() => {});
+    loadManualAdsSpendFromSupabase().then(setManualAdsSpend).catch(() => {});
+    loadExtraChargesFromSupabase().then(setExtraCharges).catch(() => {});
   }, []);
 
   const submitCloudAuth = async () => {
@@ -4535,6 +4600,7 @@ export default function App() {
     };
 
     let nextProducts;
+    let savedProductRecord;
 
     if (editingProductId) {
       nextProducts = products.map((product) =>
@@ -4552,6 +4618,7 @@ export default function App() {
                 }
               : product
         );
+      savedProductRecord = nextProducts.find((product) => product.id === editingProductId) || null;
     } else {
       const newProduct = {
         id: createProductId(),
@@ -4566,14 +4633,26 @@ export default function App() {
       };
 
       nextProducts = [...products, newProduct];
+      savedProductRecord = newProduct;
     }
 
+    const nextStockPurchases = savedProductRecord
+      ? upsertManualSeedStockPurchase(stockPurchases, savedProductRecord)
+      : stockPurchases;
+
     setProducts(nextProducts);
-    latestSharedStateRef.current = {
+    setStockPurchases(nextStockPurchases);
+    const nextSnapshot = {
       ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
       products: nextProducts.map(sanitizeProductRecord),
+      stockPurchases: nextStockPurchases,
     };
-    const saveOk = await persistProductsSnapshot(nextProducts, editingProductId ? "Cloud product updated" : "Cloud product added");
+    latestSharedStateRef.current = nextSnapshot;
+    const saveOk = await persistSharedSnapshot(nextSnapshot, {
+      progressNotice: "Saving product changes to cloud...",
+      successNotice: editingProductId ? "Cloud product updated" : "Cloud product added",
+      failurePrefix: "Cloud product sync failed",
+    });
     if (!saveOk) {
       setSharedWorkspace((prev) => ({
         ...prev,
@@ -4649,16 +4728,22 @@ export default function App() {
     const nextProducts = products.filter((p) => p.id !== productId);
     const nextTracking = tracking.filter((t) => t.productId !== productId);
     const nextCustomers = customers.filter((c) => c.productId !== productId);
+    const nextStockPurchases = stockPurchases.filter((purchase) => purchase.product_id !== productId);
+    const nextStockMovements = stockMovements.filter((movement) => movement.product_id !== productId);
 
     setProducts(nextProducts);
     setTracking(nextTracking);
     setCustomers(nextCustomers);
+    setStockPurchases(nextStockPurchases);
+    setStockMovements(nextStockMovements);
 
     const nextSnapshot = {
       ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
       products: nextProducts.map(sanitizeProductRecord),
       tracking: nextTracking,
       customers: nextCustomers.map(sanitizeCustomerRecord),
+      stockPurchases: nextStockPurchases,
+      stockMovements: nextStockMovements,
     };
     latestSharedStateRef.current = nextSnapshot;
     void persistSharedSnapshot(nextSnapshot, {
@@ -5060,7 +5145,7 @@ export default function App() {
       }
       event.target.value = "";
     },
-    [serviceForm, supabaseEnabled]
+    [serviceForm]
   );
 
   const importShippingFromExcel = useCallback(
@@ -5448,8 +5533,8 @@ export default function App() {
   };
 
   const markDubaiStockArrived = (productId) => {
-    setProducts((prev) =>
-      prev.map((p) =>
+    setProducts((prev) => {
+      const nextProducts = prev.map((p) =>
         p.id === productId
           ? {
               ...p,
@@ -5458,13 +5543,24 @@ export default function App() {
               nextArrivalCheckDate: null,
             }
           : p
-      )
-    );
+      );
+      const nextSnapshot = {
+        ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+        products: nextProducts.map(sanitizeProductRecord),
+      };
+      latestSharedStateRef.current = nextSnapshot;
+      void persistSharedSnapshot(nextSnapshot, {
+        progressNotice: "Saving stock arrival update...",
+        successNotice: "Stock arrival updated",
+        failurePrefix: "Stock arrival update failed",
+      });
+      return nextProducts;
+    });
   };
 
   const markDubaiStockNotYet = (productId) => {
-    setProducts((prev) =>
-      prev.map((p) =>
+    setProducts((prev) => {
+      const nextProducts = prev.map((p) =>
         p.id === productId
           ? {
               ...p,
@@ -5472,8 +5568,19 @@ export default function App() {
               nextArrivalCheckDate: addDaysToDateString(getTodayString(), 1),
             }
           : p
-      )
-    );
+      );
+      const nextSnapshot = {
+        ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()),
+        products: nextProducts.map(sanitizeProductRecord),
+      };
+      latestSharedStateRef.current = nextSnapshot;
+      void persistSharedSnapshot(nextSnapshot, {
+        progressNotice: "Saving stock arrival update...",
+        successNotice: "Stock arrival updated",
+        failurePrefix: "Stock arrival update failed",
+      });
+      return nextProducts;
+    });
   };
 
   const exportReport = () => {
@@ -5622,7 +5729,7 @@ export default function App() {
     };
   }, [customersDashboard, productDashboard, tracking]);
 
-  const liveServiceDataset = useMemo(() => {
+  const _liveServiceDataset = useMemo(() => {
     const config = serviceCountryData[selectedService]?.[selectedCountry];
     if (!config) return null;
 
@@ -6653,43 +6760,89 @@ export default function App() {
     );
   }, [auditRows, deferredAuditSearch]);
 
-  // Direct Supabase aggregates for the Overview tab — bypasses the full React state chain.
+  // Rebuilt profit metrics — single source of truth for the Profit Center.
   const profitOverviewMetrics = useMemo(() => {
     const exchangeRate = Number(serviceForm?.exchangeRate || USD_TO_TZS);
-    // Product charges: in-memory stockPurchases (loaded from Supabase workspace blob)
-    const productChargesUsd = stockPurchases
+
+    // Revenue: Excel import → Supabase orders → fallback
+    const revenueTsh = revenueImport?.revenueTsh ?? profitOverviewDirect?.revenueTsh ?? profitCenterRows.reduce((s, r) => s + Number(r.revenue || 0), 0);
+    const revenueUsd = revenueTsh / exchangeRate;
+    const deliveredUnits = revenueImport?.deliveredUnits ?? profitOverviewDirect?.deliveredUnits ?? 0;
+
+    // Stock Charges: received stock purchases only
+    const stockChargesUsd = stockPurchases
       .filter((p) => String(p.status || "").toLowerCase() === "received")
       .reduce((sum, p) => sum + Number(p.total_landed_cost_usd || 0), 0);
-    const productChargesTzs = productChargesUsd * exchangeRate;
-    const globalExpensesTzs = Number(situationsSummary?.fixedChargesTzs || 0);
+    const stockChargesTzs = stockChargesUsd * exchangeRate;
 
-    // Revenue source priority: 1) Excel import  2) Supabase orders query  3) profitCenterRows fallback
-    const revenueTsh = revenueImport?.revenueTsh ?? profitOverviewDirect?.revenueTsh ?? profitCenterRows.reduce((s, r) => s + Number(r.revenue || 0), 0);
-    const deliveredUnits = revenueImport?.deliveredUnits ?? profitOverviewDirect?.deliveredUnits ?? profitCenterRows.reduce((s, r) => s + Number(r.deliveredUnits || 0), 0);
+    // Service Charges: Excel import → Supabase orders (Dar=8, other=9)
     const serviceChargesUsd = revenueImport?.serviceChargesUsd ?? profitOverviewDirect?.serviceChargesUsd ?? 0;
-    const adsSpendUsd = profitOverviewDirect?.adsSpendUsd ?? profitCenterRows.reduce((s, r) => s + Number(r.adsChargesTzs || 0), 0) / exchangeRate;
-
-    const adsSpendTzs = adsSpendUsd * exchangeRate;
     const serviceChargesTzs = serviceChargesUsd * exchangeRate;
-    const businessProfitTzs = revenueTsh - productChargesTzs - adsSpendTzs - serviceChargesTzs - globalExpensesTzs;
+
+    // Ads: Meta (from ads_campaigns table) + Manual weekly entries
+    const metaAdsUsd = profitOverviewDirect?.adsSpendUsd ?? 0;
+    const manualAdsUsd = manualAdsSpend.reduce((s, e) => s + Number(e.amountUsd || 0), 0);
+    const totalAdsUsd = metaAdsUsd + manualAdsUsd;
+    const totalAdsTzs = totalAdsUsd * exchangeRate;
+
+    // Extra Charges
+    const extraChargesUsd = extraCharges.reduce((s, e) => s + Number(e.amountUsd || 0), 0);
+    const extraChargesTzs = extraChargesUsd * exchangeRate;
+
+    // Business Profit
+    const businessProfitUsd = revenueUsd - stockChargesUsd - serviceChargesUsd - totalAdsUsd - extraChargesUsd;
+    const businessProfitTzs = businessProfitUsd * exchangeRate;
+    const profitMarginPct = revenueUsd > 0 ? (businessProfitUsd / revenueUsd) * 100 : 0;
 
     return {
-      revenueTsh,
-      revenueUsd: revenueTsh / exchangeRate,
-      deliveredUnits,
-      productChargesTzs,
-      productChargesUsd,
-      adsSpendTzs,
-      adsSpendUsd,
-      serviceChargesTzs,
-      serviceChargesUsd,
-      globalExpensesTzs,
-      businessProfitTzs,
-      businessProfitUsd: businessProfitTzs / exchangeRate,
-      revenueSource: revenueImport ? "excel" : profitOverviewDirect ? "supabase" : "memory",
+      revenueTsh, revenueUsd, deliveredUnits,
+      stockChargesUsd, stockChargesTzs,
+      serviceChargesUsd, serviceChargesTzs,
+      metaAdsUsd, metaAdsTzs: metaAdsUsd * exchangeRate,
+      manualAdsUsd, manualAdsTzs: manualAdsUsd * exchangeRate,
+      totalAdsUsd, totalAdsTzs,
+      extraChargesUsd, extraChargesTzs,
+      businessProfitUsd, businessProfitTzs, profitMarginPct,
       revenueImportedAt: revenueImport?.importedAt || null,
+      revenueSource: revenueImport ? "excel" : profitOverviewDirect ? "supabase" : "memory",
+      // backward compat aliases used by profitCenterRows
+      productChargesUsd: stockChargesUsd, productChargesTzs: stockChargesTzs,
+      adsSpendUsd: totalAdsUsd, adsSpendTzs: totalAdsTzs,
+      globalExpensesTzs: 0,
     };
-  }, [profitOverviewDirect, revenueImport, stockPurchases, serviceForm, situationsSummary, profitCenterRows]);
+  }, [profitOverviewDirect, revenueImport, stockPurchases, serviceForm, manualAdsSpend, extraCharges, profitCenterRows]);
+
+  // Per-product manual ads lookup
+  const manualAdsByProduct = useMemo(() => {
+    const map = {};
+    for (const e of manualAdsSpend) {
+      const pid = e.productId || "__unmapped__";
+      map[pid] = (map[pid] || 0) + Number(e.amountUsd || 0);
+    }
+    return map;
+  }, [manualAdsSpend]);
+
+  // Per-product profit rows (used in Product Profit tab)
+  const productProfitRows = useMemo(() => {
+    const exchangeRate = Number(serviceForm?.exchangeRate || USD_TO_TZS);
+    return profitCenterRows.map((row) => {
+      const revenueUsd = Number(row.revenue || 0) / exchangeRate;
+      const stockCostUsd = Number(row.stockPurchaseTzs || 0) / exchangeRate;
+      const serviceFeesUsd = Number(row.deliveryChargesTzs || 0) / exchangeRate;
+      const metaAdsUsd = Number(row.adsChargesTzs || 0) / exchangeRate;
+      const manualAdsForProduct = manualAdsByProduct[row.id] || 0;
+      const totalAdsUsd = metaAdsUsd + manualAdsForProduct;
+      const profitUsd = revenueUsd - stockCostUsd - serviceFeesUsd - totalAdsUsd;
+      const marginPct = revenueUsd > 0 ? (profitUsd / revenueUsd) * 100 : 0;
+      return {
+        ...row,
+        revenueUsd, stockCostUsd, serviceFeesUsd,
+        metaAdsUsd, manualAdsUsd: manualAdsForProduct, totalAdsUsd,
+        profitUsd, profitTzs: profitUsd * exchangeRate, marginPct,
+        status: revenueUsd === 0 ? "no-data" : profitUsd >= 0 ? "positive" : "negative",
+      };
+    });
+  }, [profitCenterRows, manualAdsByProduct, serviceForm]);
 
   const profitCenterSummary = useMemo(() => {
     const totals = profitCenterRows.reduce(
@@ -6725,14 +6878,14 @@ export default function App() {
     };
   }, [auditRows]);
 
-  const addSituationSalary = () => {
+  const _addSituationSalary = () => {
     setSituationData((prev) => ({
       ...prev,
       salaries: [...prev.salaries, { id: `salary-${Date.now()}`, name: "", role: "", amountTzs: 0 }],
     }));
   };
 
-  const updateSituationSalary = (salaryId, field, value) => {
+  const _updateSituationSalary = (salaryId, field, value) => {
     setSituationData((prev) => ({
       ...prev,
       salaries: prev.salaries.map((entry) =>
@@ -6743,21 +6896,21 @@ export default function App() {
     }));
   };
 
-  const removeSituationSalary = (salaryId) => {
+  const _removeSituationSalary = (salaryId) => {
     setSituationData((prev) => ({
       ...prev,
       salaries: prev.salaries.filter((entry) => entry.id !== salaryId),
     }));
   };
 
-  const addSituationFixedCharge = () => {
+  const _addSituationFixedCharge = () => {
     setSituationData((prev) => ({
       ...prev,
       fixedCharges: [...prev.fixedCharges, { id: `fixed-${Date.now()}`, label: "", amountTzs: 0 }],
     }));
   };
 
-  const updateSituationFixedCharge = (chargeId, field, value) => {
+  const _updateSituationFixedCharge = (chargeId, field, value) => {
     setSituationData((prev) => ({
       ...prev,
       fixedCharges: prev.fixedCharges.map((entry) =>
@@ -6768,7 +6921,7 @@ export default function App() {
     }));
   };
 
-  const removeSituationFixedCharge = (chargeId) => {
+  const _removeSituationFixedCharge = (chargeId) => {
     setSituationData((prev) => ({
       ...prev,
       fixedCharges: prev.fixedCharges.filter((entry) => entry.id !== chargeId),
@@ -11536,305 +11689,343 @@ export default function App() {
               <PageHeader
                 eyebrow="Profit Center"
                 title="Financial results"
-                description="Final financial results only. Adjust global expenses and cash balance here. Real data — not a planning tool."
+                description="Revenue from orders, stock charges from purchases, manual ads and extra charges — all combined into one profit view."
               />
               <InlineTabs
                 items={[
                   { value: "overview", label: "Overview" },
                   { value: "product-profit", label: "Product Profit" },
-                  { value: "global-expenses", label: "Global Expenses" },
+                  { value: "ads-spend", label: "Ads Spend" },
+                  { value: "extra-charges", label: "Extra Charges" },
                   { value: "cash-balance", label: "Cash Balance" },
                 ]}
                 value={profitTab}
                 onChange={setProfitTab}
               />
 
-              {profitTab === "overview" && (
-                <div style={{ display: "grid", gap: 16 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 16 }}>
-                    <KpiCard icon={<Wallet size={18} />} title="Revenue" value={formatUSD(profitOverviewMetrics.revenueUsd)} sub={formatTZS(profitOverviewMetrics.revenueTsh) + " — delivered orders"} valueColor={green} />
-                    <KpiCard icon={<Archive size={18} />} title="Product Charges" value={formatUSD(profitOverviewMetrics.productChargesUsd)} sub={formatTZS(profitOverviewMetrics.productChargesTzs) + " — received stock only"} valueColor={amber} />
-                    <KpiCard icon={<ClipboardList size={18} />} title="Ads Charges" value={formatUSD(profitOverviewMetrics.adsSpendUsd)} sub={formatTZS(profitOverviewMetrics.adsSpendTzs) + " — all campaigns"} valueColor={amber} />
-                    <KpiCard icon={<Boxes size={18} />} title="Delivered Units" value={profitOverviewMetrics.deliveredUnits} sub="Quantity from delivered orders" />
-                    <KpiCard icon={<TrendingUp size={18} />} title="Service Charges" value={formatUSD(profitOverviewMetrics.serviceChargesUsd)} sub={formatTZS(profitOverviewMetrics.serviceChargesTzs) + " — delivery fees"} valueColor={amber} />
-                    <KpiCard icon={<Users size={18} />} title="Global Expenses" value={formatUSD(profitOverviewMetrics.globalExpensesTzs / (Number(serviceForm?.exchangeRate || USD_TO_TZS)))} sub={formatTZS(profitOverviewMetrics.globalExpensesTzs) + " — salaries + fixed charges"} valueColor={amber} />
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 16 }}>
-                    <KpiCard icon={<TrendingUp size={18} />} title="Business Profit" value={formatUSD(profitOverviewMetrics.businessProfitUsd)} sub={formatTZS(profitOverviewMetrics.businessProfitTzs) + " — revenue minus all charges"} valueColor={profitOverviewMetrics.businessProfitTzs >= 0 ? green : red} />
-                  </div>
-
-                  {/* Revenue Import card */}
-                  <div style={{ ...styles.card, padding: 22 }}>
-                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-                      <div>
-                        <div style={styles.sectionEyebrow}>Revenue Import</div>
-                        <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6 }}>Import Excel for Revenue</div>
-                        <div style={{ color: textSoft, fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>
-                          Upload your shipping / leads Excel file. The app reads AMOUNT + SHIPPING STATUS and sums revenue from delivered orders only.
-                        </div>
-                        {profitOverviewMetrics.revenueImportedAt && (
-                          <div style={{ color: textSoft, fontSize: 12, marginTop: 8 }}>
-                            Last import: {new Date(profitOverviewMetrics.revenueImportedAt).toLocaleString()} · {revenueImport?.deliveredCount ?? 0} delivered rows · {revenueImport?.rowCount ?? 0} total rows
-                          </div>
-                        )}
-                      </div>
-                      <label style={{ ...styles.btnPrimary, cursor: "pointer", whiteSpace: "nowrap" }}>
-                        Import Excel for Revenue
-                        <input type="file" accept=".xlsx,.xls" onChange={importRevenueFromExcel} style={{ display: "none" }} />
-                      </label>
+              {/* ── OVERVIEW TAB ── */}
+              {profitTab === "overview" && (() => {
+                const m = profitOverviewMetrics;
+                const rows = [
+                  { label: "Revenue", value: m.revenueUsd, tsh: m.revenueTsh, color: green, sign: "+" },
+                  { label: "Stock Charges", value: m.stockChargesUsd, tsh: m.stockChargesTzs, color: amber, sign: "-" },
+                  { label: "Service Fees", value: m.serviceChargesUsd, tsh: m.serviceChargesTzs, color: amber, sign: "-" },
+                  { label: "Ads Spend (Meta)", value: m.metaAdsUsd, tsh: m.metaAdsTzs, color: amber, sign: "-" },
+                  { label: "Ads Spend (Manual)", value: m.manualAdsUsd, tsh: m.manualAdsTzs, color: amber, sign: "-" },
+                  { label: "Extra Charges", value: m.extraChargesUsd, tsh: m.extraChargesTzs, color: amber, sign: "-" },
+                ];
+                return (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    {/* KPI cards */}
+                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 14 }}>
+                      <KpiCard icon={<Wallet size={18} />} title="Revenue" value={formatUSD(m.revenueUsd)} sub={formatTZS(m.revenueTsh) + " — delivered orders"} valueColor={green} />
+                      <KpiCard icon={<Archive size={18} />} title="Stock Charges" value={formatUSD(m.stockChargesUsd)} sub={formatTZS(m.stockChargesTzs) + " — received purchases"} valueColor={amber} />
+                      <KpiCard icon={<TrendingUp size={18} />} title="Service Fees" value={formatUSD(m.serviceChargesUsd)} sub={formatTZS(m.serviceChargesTzs) + " — Dar $8 · Other $9"} valueColor={amber} />
+                      <KpiCard icon={<ClipboardList size={18} />} title="Total Ads" value={formatUSD(m.totalAdsUsd)} sub={`Meta ${formatUSD(m.metaAdsUsd)} + Manual ${formatUSD(m.manualAdsUsd)}`} valueColor={amber} />
+                      <KpiCard icon={<Boxes size={18} />} title="Extra Charges" value={formatUSD(m.extraChargesUsd)} sub={formatTZS(m.extraChargesTzs) + " — transport / tools / other"} valueColor={amber} />
+                      <KpiCard icon={<TrendingUp size={18} />} title="Delivered Units" value={m.deliveredUnits} sub="From delivered orders" />
                     </div>
-                    {revenueImportNotice && (
-                      <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: 10, background: revenueImportNotice.startsWith("Import failed") ? "rgba(239,68,68,0.08)" : "rgba(34,197,94,0.08)", color: revenueImportNotice.startsWith("Import failed") ? red : green, fontSize: 13, fontWeight: 700 }}>
-                        {revenueImportNotice}
-                      </div>
-                    )}
-                    {revenueImport && (
-                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 12, marginTop: 16 }}>
-                        <div style={styles.softStat}>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: textSoft, textTransform: "uppercase", letterSpacing: 0.4 }}>Revenue</div>
-                          <div style={{ fontSize: 20, fontWeight: 900, color: green, marginTop: 4 }}>{formatUSD(revenueImport.revenueUsd)}</div>
-                          <div style={{ fontSize: 12, color: textSoft }}>{formatTZS(revenueImport.revenueTsh)}</div>
-                        </div>
-                        <div style={styles.softStat}>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: textSoft, textTransform: "uppercase", letterSpacing: 0.4 }}>Delivered Orders</div>
-                          <div style={{ fontSize: 20, fontWeight: 900, marginTop: 4 }}>{revenueImport.deliveredCount}</div>
-                          <div style={{ fontSize: 12, color: textSoft }}>{revenueImport.deliveredUnits} units</div>
-                        </div>
-                        <div style={styles.softStat}>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: textSoft, textTransform: "uppercase", letterSpacing: 0.4 }}>Service Charges</div>
-                          <div style={{ fontSize: 20, fontWeight: 900, color: amber, marginTop: 4 }}>{formatUSD(revenueImport.serviceChargesUsd)}</div>
-                          <div style={{ fontSize: 12, color: textSoft }}>{formatTZS(revenueImport.serviceChargesUsd * Number(serviceForm?.exchangeRate || USD_TO_TZS))}</div>
-                        </div>
-                        <div style={styles.softStat}>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: textSoft, textTransform: "uppercase", letterSpacing: 0.4 }}>Total Rows</div>
-                          <div style={{ fontSize: 20, fontWeight: 900, marginTop: 4 }}>{revenueImport.rowCount}</div>
-                          <div style={{ fontSize: 12, color: textSoft }}>{revenueImport.rowCount - revenueImport.deliveredCount} non-delivered</div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
 
-                  {liveServiceDataset && (
+                    {/* Profit formula */}
                     <div style={{ ...styles.card, padding: 22 }}>
-                      <div style={styles.sectionEyebrow}>Live COD funnel</div>
-                      <div style={{ fontSize: 22, fontWeight: 900, marginTop: 8, marginBottom: 16 }}>Real business metrics</div>
-                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 16 }}>
-                        <KpiCard title="Confirmed" value={liveServiceDataset.confirmed} sub={`${Math.round(liveServiceDataset.confirmationRate * 100)}% confirmation rate`} />
-                        <KpiCard title="Delivered" value={liveServiceDataset.delivered} sub={`${Math.round(liveServiceDataset.deliveryRate * 100)}% delivery rate`} />
-                        <KpiCard title="Delivered Units" value={liveServiceDataset.deliveredUnits} sub="Real delivered quantity" />
-                        <KpiCard title="Cost / Lead USD" value={formatUSD(liveServiceDataset.costPerLeadUsd)} sub="Ad spend / total leads" />
-                        <KpiCard title="Revenue USD" value={formatUSD(liveServiceDataset.revenueUsd)} sub="Delivered orders revenue" valueColor={green} />
-                        <KpiCard title="Product Cost USD" value={formatUSD(liveServiceDataset.productCostTotalUsd)} sub="Delivered units import cost" />
-                        <KpiCard title="Service Charges USD" value={formatUSD(liveServiceDataset.totalServiceChargeUsd)} sub="Platform fee + per delivery fee" />
-                        <KpiCard title="Break-even Ads / Lead" value={formatUSD(liveServiceDataset.breakEvenCplUsd)} sub="Max ad cost per lead to stay profitable" valueColor={liveServiceDataset.breakEvenCplUsd >= liveServiceDataset.costPerLeadUsd ? green : red} />
+                      <div style={styles.sectionEyebrow}>Profit Formula</div>
+                      <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6, marginBottom: 16 }}>Step-by-step calculation</div>
+                      <div style={{ display: "grid", gap: 0 }}>
+                        {rows.map((r, i) => (
+                          <div key={r.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0", borderBottom: i < rows.length - 1 ? `1px solid ${cardBorder}` : "none" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <span style={{ fontSize: 16, fontWeight: 900, color: r.sign === "+" ? green : amber, width: 16 }}>{r.sign}</span>
+                              <span style={{ fontWeight: 700 }}>{r.label}</span>
+                            </div>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontWeight: 900, color: r.color }}>{formatUSD(r.value)}</div>
+                              <div style={{ fontSize: 12, color: textSoft }}>{formatTZS(r.tsh)}</div>
+                            </div>
+                          </div>
+                        ))}
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 0", marginTop: 4, borderTop: `2px solid ${cardBorder}` }}>
+                          <div style={{ fontSize: 18, fontWeight: 900 }}>= Business Profit</div>
+                          <div style={{ textAlign: "right" }}>
+                            <div style={{ fontSize: 22, fontWeight: 900, color: m.businessProfitUsd >= 0 ? green : red }}>{formatUSD(m.businessProfitUsd)}</div>
+                            <div style={{ fontSize: 13, color: textSoft }}>{formatTZS(m.businessProfitTzs)} · {m.profitMarginPct.toFixed(1)}% margin</div>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  )}
-                </div>
-              )}
 
+                    {/* Revenue import */}
+                    <div style={{ ...styles.card, padding: 22 }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                        <div>
+                          <div style={styles.sectionEyebrow}>Revenue Source</div>
+                          <div style={{ fontSize: 18, fontWeight: 900, marginTop: 6 }}>Import Excel for Revenue</div>
+                          <div style={{ color: textSoft, fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>Upload shipping / leads Excel. Reads AMOUNT + SHIPPING STATUS, sums delivered orders only.</div>
+                          {m.revenueImportedAt && <div style={{ color: textSoft, fontSize: 12, marginTop: 6 }}>Last import: {new Date(m.revenueImportedAt).toLocaleString()} · {revenueImport?.deliveredCount ?? 0} delivered · {revenueImport?.rowCount ?? 0} total rows</div>}
+                        </div>
+                        <label style={{ ...styles.btnPrimary, cursor: "pointer", whiteSpace: "nowrap" }}>
+                          Import Excel
+                          <input type="file" accept=".xlsx,.xls" onChange={importRevenueFromExcel} style={{ display: "none" }} />
+                        </label>
+                      </div>
+                      {revenueImportNotice && <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 10, background: revenueImportNotice.startsWith("Import failed") ? "rgba(239,68,68,0.08)" : "rgba(34,197,94,0.08)", color: revenueImportNotice.startsWith("Import failed") ? red : green, fontSize: 13, fontWeight: 700 }}>{revenueImportNotice}</div>}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── PRODUCT PROFIT TAB ── */}
               {profitTab === "product-profit" && (
                 <div style={{ ...styles.card, padding: 22 }}>
-                  <div style={styles.sectionHeader}>
-                    <div>
-                      <div style={styles.sectionEyebrow}>Net profit center</div>
-                      <div style={{ fontSize: 24, fontWeight: 900, marginTop: 8 }}>Cash in, charges and balance by product</div>
-                      <div style={{ color: textSoft, marginTop: 6, lineHeight: 1.6 }}>
-                        Product Charge = Stock purchase + import charges + delivery fees. Add ads charges for the final balance.
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{ overflowX: "auto", border: `1px solid ${cardBorder}`, borderRadius: 20 }}>
+                  <div style={styles.sectionEyebrow}>Per-product breakdown</div>
+                  <div style={{ fontSize: 22, fontWeight: 900, marginTop: 6, marginBottom: 16 }}>Revenue · Stock · Service · Ads · Profit</div>
+                  <div style={{ overflowX: "auto", border: `1px solid ${cardBorder}`, borderRadius: 16 }}>
                     <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
                       <thead>
                         <tr>
-                          {["Product", "Orders", "Delivered Units", "Revenue", "Stock Purchase", "Import Charges", "Delivery Charges", "Ads Charges", "Total Out", "Balance", "Balance / Order", "Status"].map((head) => (
-                            <th key={head} style={{ textAlign: "left", padding: "14px 12px", color: textSoft, fontSize: 12, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247, 243, 237, 0.92)" }}>
-                              {head}
-                            </th>
+                          {["Product", "Delivered", "Revenue", "Stock Cost", "Service Fees", "Meta Ads", "Manual Ads", "Profit", "Margin", "Status"].map((h) => (
+                            <th key={h} style={{ textAlign: "left", padding: "12px 10px", color: textSoft, fontSize: 11, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)", whiteSpace: "nowrap" }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {profitCenterRows.map((row, index) => (
-                          <tr key={row.id} style={{ background: index % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>
-                              <div style={{ fontWeight: 800 }}>{row.name}</div>
-                              <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>{row.availableStock} available | {row.reorderStatus}</div>
-                            </td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.orders}</td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{row.deliveredUnits}</td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.revenue)}</td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.stockPurchaseTzs)}</td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.importChargesTzs)}</td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.deliveryChargesTzs)}</td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>
-                              <div style={{ fontWeight: 800 }}>{formatUsdFromTzs(row.adsChargesTzs)}</div>
-                              <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>{row.adsSourceLabel}</div>
-                            </td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800 }}>{formatUsdFromTzs(row.totalChargesTzs)}</td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}`, color: Number(row.balanceTzs || 0) >= 0 ? green : red, fontWeight: 800 }}>{formatUsdFromTzs(row.balanceTzs)}</td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>{formatUsdFromTzs(row.balancePerOrderTzs)}</td>
-                            <td style={{ padding: "14px 12px", borderBottom: `1px solid ${cardBorder}` }}>
-                              <div style={getDecisionStyle(Number(row.balanceTzs || 0) > 0 ? "OK" : "WATCH")}>{Number(row.balanceTzs || 0) > 0 ? "Positive" : "Negative"}</div>
+                        {productProfitRows.map((row, idx) => (
+                          <tr key={row.id} style={{ background: idx % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800 }}>{row.name}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.deliveredUnits}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: green, fontWeight: 700 }}>{formatUSD(row.revenueUsd)}<div style={{ fontSize: 11, color: textSoft }}>{formatTZS(row.revenue)}</div></td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: amber }}>{formatUSD(row.stockCostUsd)}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: amber }}>{formatUSD(row.serviceFeesUsd)}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: amber }}>{formatUSD(row.metaAdsUsd)}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, color: amber }}>{formatUSD(row.manualAdsUsd)}</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 800, color: row.profitUsd >= 0 ? green : red }}>{formatUSD(row.profitUsd)}<div style={{ fontSize: 11, color: textSoft }}>{formatTZS(row.profitTzs)}</div></td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>{row.marginPct.toFixed(1)}%</td>
+                            <td style={{ padding: "12px 10px", borderBottom: `1px solid ${cardBorder}` }}>
+                              <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 800, background: row.status === "positive" ? "rgba(34,197,94,0.12)" : row.status === "negative" ? "rgba(239,68,68,0.12)" : "rgba(100,116,139,0.1)", color: row.status === "positive" ? green : row.status === "negative" ? red : textSoft }}>
+                                {row.status === "positive" ? "Positive" : row.status === "negative" ? "Negative" : "No Data"}
+                              </span>
                             </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                    {profitCenterRows.length === 0 ? <div style={{ padding: 24, color: textSoft }}>No product data yet.</div> : null}
+                    {productProfitRows.length === 0 && <div style={{ padding: 24, color: textSoft }}>No product data yet.</div>}
                   </div>
+                </div>
+              )}
 
-                  <div style={{ ...styles.softStat, marginTop: 16 }}>
-                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: textSoft }}>Meta daily spend log</div>
-                    <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-                      {(metaAdsState.dailySpendSnapshots || []).slice(0, 6).map((snapshot) => (
-                        <div key={snapshot.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 14px", borderRadius: 14, background: "rgba(255,255,255,0.72)", border: `1px solid ${cardBorder}` }}>
-                          <div>
-                            <div style={{ fontWeight: 800 }}>{snapshot.bucket}</div>
-                            <div style={{ color: textSoft, fontSize: 12, marginTop: 4 }}>
-                              {snapshot.capturedAt ? new Date(snapshot.capturedAt).toLocaleString() : "No timestamp"} | New today {formatUsdFromTzs(snapshot.newSpendTzs || 0)}
+              {/* ── ADS SPEND TAB ── */}
+              {profitTab === "ads-spend" && (() => {
+                const xr = Number(serviceForm?.exchangeRate || USD_TO_TZS);
+                const addEntry = async () => {
+                  if (!manualAdsForm.weekStart || !manualAdsForm.weekEnd || !manualAdsForm.amountUsd) {
+                    setManualAdsNotice("Week start, week end and amount are required.");
+                    return;
+                  }
+                  const amtUsd = Number(manualAdsForm.amountUsd) || 0;
+                  const product = products.find((p) => p.id === manualAdsForm.productId);
+                  const entry = {
+                    weekStart: manualAdsForm.weekStart, weekEnd: manualAdsForm.weekEnd,
+                    productId: manualAdsForm.productId || "", productName: product?.name || manualAdsForm.productName || "",
+                    amountUsd: amtUsd, amountTsh: amtUsd * xr,
+                    notes: manualAdsForm.notes || "",
+                  };
+                  try {
+                    const saved = await saveManualAdsSpendToSupabase(entry);
+                    const newEntry = { ...entry, id: saved?.id || `local-${Date.now()}`, createdAt: saved?.created_at || new Date().toISOString() };
+                    setManualAdsSpend((prev) => [newEntry, ...prev]);
+                    setManualAdsForm({ weekStart: "", weekEnd: "", productId: "", productName: "", amountUsd: "", notes: "" });
+                    setManualAdsNotice("Ads entry saved.");
+                  } catch { setManualAdsNotice("Failed to save."); }
+                };
+                const removeEntry = async (id) => {
+                  await deleteManualAdsSpendFromSupabase(id).catch(() => {});
+                  setManualAdsSpend((prev) => prev.filter((e) => e.id !== id));
+                };
+                const totalManualUsd = manualAdsSpend.reduce((s, e) => s + Number(e.amountUsd || 0), 0);
+                const metaTotal = profitOverviewMetrics.metaAdsUsd;
+                return (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 14 }}>
+                      <KpiCard icon={<ClipboardList size={18} />} title="Meta Ads Total" value={formatUSD(metaTotal)} sub={formatTZS(metaTotal * xr) + " — from ads_campaigns"} valueColor={amber} />
+                      <KpiCard icon={<Archive size={18} />} title="Manual Ads Total" value={formatUSD(totalManualUsd)} sub={formatTZS(totalManualUsd * xr) + " — weekly entries"} valueColor={amber} />
+                      <KpiCard icon={<TrendingUp size={18} />} title="Combined Ads" value={formatUSD(metaTotal + totalManualUsd)} sub={formatTZS((metaTotal + totalManualUsd) * xr) + " — Meta + Manual"} valueColor={amber} />
+                    </div>
+                    <div style={{ ...styles.card, padding: 22 }}>
+                      <div style={styles.sectionEyebrow}>Add Weekly Entry</div>
+                      <div style={{ fontSize: 18, fontWeight: 900, marginTop: 6, marginBottom: 14 }}>Manual Ads Spend</div>
+                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr 1fr 1fr 1fr auto", "1fr 1fr 1fr", "1fr"), gap: 10, alignItems: "end" }}>
+                        <div style={styles.fieldBlock}><label style={styles.fieldLabel}>Week Start</label><input style={styles.input} type="date" value={manualAdsForm.weekStart} onChange={(e) => setManualAdsForm((f) => ({ ...f, weekStart: e.target.value }))} /></div>
+                        <div style={styles.fieldBlock}><label style={styles.fieldLabel}>Week End</label><input style={styles.input} type="date" value={manualAdsForm.weekEnd} onChange={(e) => setManualAdsForm((f) => ({ ...f, weekEnd: e.target.value }))} /></div>
+                        <div style={styles.fieldBlock}>
+                          <label style={styles.fieldLabel}>Product (optional)</label>
+                          <select style={styles.input} value={manualAdsForm.productId} onChange={(e) => setManualAdsForm((f) => ({ ...f, productId: e.target.value }))}>
+                            <option value="">Global / Unmapped</option>
+                            {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          </select>
+                        </div>
+                        <div style={styles.fieldBlock}><label style={styles.fieldLabel}>Amount USD</label><input style={styles.input} type="number" min="0" step="0.01" placeholder="0.00" value={manualAdsForm.amountUsd} onChange={(e) => setManualAdsForm((f) => ({ ...f, amountUsd: e.target.value }))} /></div>
+                        <div style={styles.fieldBlock}><label style={styles.fieldLabel}>Notes</label><input style={styles.input} placeholder="Optional" value={manualAdsForm.notes} onChange={(e) => setManualAdsForm((f) => ({ ...f, notes: e.target.value }))} /></div>
+                        <button style={styles.btnPrimary} onClick={addEntry}>Add</button>
+                      </div>
+                      {manualAdsNotice && <div style={{ marginTop: 10, color: manualAdsNotice.startsWith("Failed") ? red : green, fontSize: 13, fontWeight: 700 }}>{manualAdsNotice}</div>}
+                    </div>
+                    <div style={{ ...styles.card, padding: 22 }}>
+                      <div style={{ fontSize: 16, fontWeight: 900, marginBottom: 14 }}>All Manual Entries ({manualAdsSpend.length})</div>
+                      {manualAdsSpend.length === 0 ? <div style={{ color: textSoft }}>No manual ads entries yet.</div> : (
+                        <div style={{ overflowX: "auto", border: `1px solid ${cardBorder}`, borderRadius: 14 }}>
+                          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+                            <thead><tr>{["Week", "Product", "Amount USD", "Amount TSh", "Notes", ""].map((h) => <th key={h} style={{ textAlign: "left", padding: "10px 10px", color: textSoft, fontSize: 11, fontWeight: 800, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)" }}>{h}</th>)}</tr></thead>
+                            <tbody>
+                              {manualAdsSpend.map((e, i) => (
+                                <tr key={e.id} style={{ background: i % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, fontSize: 13 }}>{e.weekStart} → {e.weekEnd}</td>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, fontSize: 13 }}>{e.productName || "Global"}</td>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700, color: amber }}>{formatUSD(e.amountUsd)}</td>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, fontSize: 12, color: textSoft }}>{formatTZS(e.amountTsh || e.amountUsd * xr)}</td>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, fontSize: 12, color: textSoft }}>{e.notes}</td>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}` }}><button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca", padding: "4px 10px", fontSize: 12 }} onClick={() => removeEntry(e.id)}>Remove</button></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── EXTRA CHARGES TAB ── */}
+              {profitTab === "extra-charges" && (() => {
+                const xr = Number(serviceForm?.exchangeRate || USD_TO_TZS);
+                const CATEGORIES = ["transport", "tools", "software", "salary", "other"];
+                const addEntry = async () => {
+                  if (!extraChargesForm.date || (!extraChargesForm.amountUsd && !extraChargesForm.amountTsh)) {
+                    setExtraChargesNotice("Date and amount are required.");
+                    return;
+                  }
+                  const amtUsd = Number(extraChargesForm.amountUsd) || (Number(extraChargesForm.amountTsh) / xr);
+                  const amtTsh = Number(extraChargesForm.amountTsh) || (amtUsd * xr);
+                  const entry = {
+                    date: extraChargesForm.date,
+                    category: extraChargesForm.category || "other",
+                    description: extraChargesForm.description || "",
+                    amountUsd: amtUsd, amountTsh: amtTsh,
+                  };
+                  try {
+                    const saved = await saveExtraChargeToSupabase(entry);
+                    const newEntry = { ...entry, id: saved?.id || `local-${Date.now()}`, createdAt: saved?.created_at || new Date().toISOString() };
+                    setExtraCharges((prev) => [newEntry, ...prev]);
+                    setExtraChargesForm({ date: "", category: "other", description: "", amountUsd: "", amountTsh: "" });
+                    setExtraChargesNotice("Charge saved.");
+                  } catch { setExtraChargesNotice("Failed to save."); }
+                };
+                const removeEntry = async (id) => {
+                  await deleteExtraChargeFromSupabase(id).catch(() => {});
+                  setExtraCharges((prev) => prev.filter((e) => e.id !== id));
+                };
+                const totalUsd = extraCharges.reduce((s, e) => s + Number(e.amountUsd || 0), 0);
+                const byCategory = CATEGORIES.map((cat) => ({ cat, total: extraCharges.filter((e) => e.category === cat).reduce((s, e) => s + Number(e.amountUsd || 0), 0) })).filter((x) => x.total > 0);
+                return (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns(`repeat(${Math.min(byCategory.length + 1, 4)}, minmax(0, 1fr))`, "repeat(2, 1fr)", "1fr"), gap: 14 }}>
+                      <KpiCard icon={<Archive size={18} />} title="Total Extra Charges" value={formatUSD(totalUsd)} sub={formatTZS(totalUsd * xr)} valueColor={amber} />
+                      {byCategory.map(({ cat, total }) => <KpiCard key={cat} title={cat.charAt(0).toUpperCase() + cat.slice(1)} value={formatUSD(total)} sub={formatTZS(total * xr)} valueColor={amber} />)}
+                    </div>
+                    <div style={{ ...styles.card, padding: 22 }}>
+                      <div style={styles.sectionEyebrow}>Add Charge</div>
+                      <div style={{ fontSize: 18, fontWeight: 900, marginTop: 6, marginBottom: 14 }}>Extra Business Charges</div>
+                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr 1fr 1fr 1fr auto", "1fr 1fr 1fr", "1fr"), gap: 10, alignItems: "end" }}>
+                        <div style={styles.fieldBlock}><label style={styles.fieldLabel}>Date</label><input style={styles.input} type="date" value={extraChargesForm.date} onChange={(e) => setExtraChargesForm((f) => ({ ...f, date: e.target.value }))} /></div>
+                        <div style={styles.fieldBlock}><label style={styles.fieldLabel}>Category</label><select style={styles.input} value={extraChargesForm.category} onChange={(e) => setExtraChargesForm((f) => ({ ...f, category: e.target.value }))}>{CATEGORIES.map((c) => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}</select></div>
+                        <div style={styles.fieldBlock}><label style={styles.fieldLabel}>Description</label><input style={styles.input} placeholder="Details" value={extraChargesForm.description} onChange={(e) => setExtraChargesForm((f) => ({ ...f, description: e.target.value }))} /></div>
+                        <div style={styles.fieldBlock}><label style={styles.fieldLabel}>Amount USD</label><input style={styles.input} type="number" min="0" step="0.01" placeholder="0.00" value={extraChargesForm.amountUsd} onChange={(e) => setExtraChargesForm((f) => ({ ...f, amountUsd: e.target.value, amountTsh: "" }))} /></div>
+                        <div style={styles.fieldBlock}><label style={styles.fieldLabel}>Amount TSh (alt)</label><input style={styles.input} type="number" min="0" placeholder="0" value={extraChargesForm.amountTsh} onChange={(e) => setExtraChargesForm((f) => ({ ...f, amountTsh: e.target.value, amountUsd: "" }))} /></div>
+                        <button style={styles.btnPrimary} onClick={addEntry}>Add</button>
+                      </div>
+                      {extraChargesNotice && <div style={{ marginTop: 10, color: extraChargesNotice.startsWith("Failed") ? red : green, fontSize: 13, fontWeight: 700 }}>{extraChargesNotice}</div>}
+                    </div>
+                    <div style={{ ...styles.card, padding: 22 }}>
+                      <div style={{ fontSize: 16, fontWeight: 900, marginBottom: 14 }}>All Charges ({extraCharges.length})</div>
+                      {extraCharges.length === 0 ? <div style={{ color: textSoft }}>No extra charges yet.</div> : (
+                        <div style={{ overflowX: "auto", border: `1px solid ${cardBorder}`, borderRadius: 14 }}>
+                          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+                            <thead><tr>{["Date", "Category", "Description", "USD", "TSh", ""].map((h) => <th key={h} style={{ textAlign: "left", padding: "10px 10px", color: textSoft, fontSize: 11, fontWeight: 800, textTransform: "uppercase", borderBottom: `1px solid ${cardBorder}`, background: "rgba(247,243,237,0.92)" }}>{h}</th>)}</tr></thead>
+                            <tbody>
+                              {extraCharges.map((e, i) => (
+                                <tr key={e.id} style={{ background: i % 2 === 0 ? "rgba(255,255,255,0.72)" : "rgba(250,247,242,0.8)" }}>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, fontSize: 13 }}>{e.date}</td>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, fontSize: 13 }}>{e.category}</td>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, fontSize: 13 }}>{e.description}</td>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, fontWeight: 700, color: amber }}>{formatUSD(e.amountUsd)}</td>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}`, fontSize: 12, color: textSoft }}>{formatTZS(e.amountTsh || e.amountUsd * xr)}</td>
+                                  <td style={{ padding: "10px 10px", borderBottom: `1px solid ${cardBorder}` }}><button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca", padding: "4px 10px", fontSize: 12 }} onClick={() => removeEntry(e.id)}>Remove</button></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── CASH BALANCE TAB ── */}
+              {profitTab === "cash-balance" && (() => {
+                const m = profitOverviewMetrics;
+                const businessProfitUsd = m.businessProfitUsd;
+                const businessProfitTsh = m.businessProfitTzs;
+                const cashBalanceUsd = businessProfitUsd + (ownerInjectionTzs / Number(serviceForm?.exchangeRate || USD_TO_TZS));
+                return (
+                  <div style={{ display: "grid", gap: 20 }}>
+                    <div style={{ ...styles.card, padding: 22 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: green, marginBottom: 6 }}>Section A — Business Profit</div>
+                      <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 14 }}>Revenue − All Costs</div>
+                      <div style={{ display: "grid", gap: 0 }}>
+                        {[
+                          { label: "Revenue", v: m.revenueUsd, tsh: m.revenueTsh, c: green },
+                          { label: "Stock Charges", v: -m.stockChargesUsd, tsh: -m.stockChargesTzs, c: amber },
+                          { label: "Service Fees", v: -m.serviceChargesUsd, tsh: -m.serviceChargesTzs, c: amber },
+                          { label: "Total Ads", v: -m.totalAdsUsd, tsh: -m.totalAdsTzs, c: amber },
+                          { label: "Extra Charges", v: -m.extraChargesUsd, tsh: -m.extraChargesTzs, c: amber },
+                        ].map((r, i, arr) => (
+                          <div key={r.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: i < arr.length - 1 ? `1px solid ${cardBorder}` : "none" }}>
+                            <span style={{ fontWeight: 600 }}>{r.v >= 0 ? "+" : "−"} {r.label}</span>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontWeight: 800, color: r.c }}>{formatUSD(Math.abs(r.v))}</div>
+                              <div style={{ fontSize: 11, color: textSoft }}>{formatTZS(Math.abs(r.tsh))}</div>
                             </div>
                           </div>
-                          <div style={{ fontWeight: 900, color: accent }}>{formatUsdFromTzs(snapshot.totalSpendTzs)}</div>
+                        ))}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0", marginTop: 4, borderTop: `2px solid ${cardBorder}` }}>
+                          <span style={{ fontSize: 16, fontWeight: 900 }}>= Business Profit</span>
+                          <div style={{ textAlign: "right" }}>
+                            <div style={{ fontSize: 20, fontWeight: 900, color: businessProfitUsd >= 0 ? green : red }}>{formatUSD(businessProfitUsd)}</div>
+                            <div style={{ fontSize: 12, color: textSoft }}>{formatTZS(businessProfitTsh)} · {m.profitMarginPct.toFixed(1)}% margin</div>
+                          </div>
                         </div>
-                      ))}
-                      {!(metaAdsState.dailySpendSnapshots || []).length ? <div style={{ color: textSoft }}>No Meta daily total captured yet.</div> : null}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {profitTab === "global-expenses" && (
-                <div style={{ display: "grid", gap: 20 }}>
-                  <div style={{ ...styles.softStat, border: "1px solid rgba(29,95,208,0.14)", background: "linear-gradient(180deg, rgba(239,245,255,0.9), rgba(255,255,255,0.92))" }}>
-                    <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: accent }}>Global expenses</div>
-                    <div style={{ marginTop: 8, color: textMain, lineHeight: 1.6 }}>
-                      These expenses are not allocated to individual products. They reduce the overall business profit.
-                      Business Profit = Revenue - Product Charges - Ads - Global Expenses.
-                    </div>
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 16 }}>
-                    <KpiCard icon={<Users size={18} />} title="Total Salaries" value={formatUsdFromTzs(situationsSummary.salariesTotalTzs)} sub="Monthly payroll" valueColor={amber} />
-                    <KpiCard icon={<Archive size={18} />} title="Fixed Charges" value={formatUsdFromTzs(situationsSummary.manualFixedChargesTzs)} sub="Rent, tools, utilities and subscriptions" valueColor={amber} />
-                    <KpiCard icon={<Wallet size={18} />} title="Total Global Expenses" value={formatUsdFromTzs(situationsSummary.fixedChargesTzs)} sub="Salaries + all fixed charges combined" valueColor={red} />
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr", "1fr", "1fr"), gap: 20 }}>
-                    <div style={{ ...styles.card, padding: 22 }}>
-                      <div style={styles.sectionHeader}>
-                        <div>
-                          <div style={styles.sectionEyebrow}>Payroll</div>
-                          <div style={{ fontSize: 22, fontWeight: 900, marginTop: 8 }}>Employee salaries</div>
-                        </div>
-                        <button style={styles.btnSecondary} onClick={addSituationSalary}>Add salary</button>
                       </div>
-                      <div style={{ display: "grid", gap: 12 }}>
-                        {situationData.salaries.length ? (
-                          situationData.salaries.map((entry) => (
-                            <div key={entry.id} style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr 180px auto", "1fr 1fr", "1fr"), gap: 10, alignItems: "end" }}>
-                              <div style={styles.fieldBlock}>
-                                <label style={styles.fieldLabel}>Name</label>
-                                <input style={styles.input} value={entry.name} onChange={(e) => updateSituationSalary(entry.id, "name", e.target.value)} />
-                              </div>
-                              <div style={styles.fieldBlock}>
-                                <label style={styles.fieldLabel}>Role</label>
-                                <input style={styles.input} value={entry.role} onChange={(e) => updateSituationSalary(entry.id, "role", e.target.value)} />
-                              </div>
-                              <div style={styles.fieldBlock}>
-                                <label style={styles.fieldLabel}>Salary USD</label>
-                                <input style={styles.input} type="number" min="0" step="0.01" value={(Number(entry.amountTzs || 0) / USD_TO_TZS).toFixed(2)} onChange={(e) => updateSituationSalary(entry.id, "amountTzs", e.target.value)} />
-                              </div>
-                              <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca" }} onClick={() => removeSituationSalary(entry.id)}>Remove</button>
-                            </div>
-                          ))
-                        ) : (
-                          <div style={{ color: textSoft }}>No salary added yet.</div>
-                        )}
-                      </div>
+                      <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 10, background: "rgba(31,143,95,0.06)", border: "1px solid rgba(31,143,95,0.12)", fontSize: 12, color: textSoft }}>Owner injection is excluded. It does NOT count as revenue.</div>
                     </div>
 
                     <div style={{ ...styles.card, padding: 22 }}>
-                      <div style={styles.sectionHeader}>
-                        <div>
-                          <div style={styles.sectionEyebrow}>Fixed costs</div>
-                          <div style={{ fontSize: 22, fontWeight: 900, marginTop: 8 }}>Other fixed charges</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: accent, marginBottom: 6 }}>Section B — Cash Balance With Injection</div>
+                      <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 14 }}>Business Profit + Owner Injection</div>
+                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr 1fr", "1fr 1fr", "1fr"), gap: 16, alignItems: "end" }}>
+                        <div style={styles.fieldBlock}>
+                          <label style={styles.fieldLabel}>Owner Injection USD — does NOT affect business profit</label>
+                          <input style={styles.input} type="number" min="0" step="0.01" placeholder="0.00"
+                            value={(ownerInjectionTzs / Number(serviceForm?.exchangeRate || USD_TO_TZS)).toFixed(2)}
+                            onChange={(e) => setOwnerInjectionTzs(Math.max(0, parseLooseNumber(e.target.value) * Number(serviceForm?.exchangeRate || USD_TO_TZS)))} />
                         </div>
-                        <button style={styles.btnSecondary} onClick={addSituationFixedCharge}>Add charge</button>
-                      </div>
-                      <div style={{ display: "grid", gap: 12 }}>
-                        {situationData.fixedCharges.length ? (
-                          situationData.fixedCharges.map((entry) => (
-                            <div key={entry.id} style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 180px auto", "1fr 180px auto", "1fr"), gap: 10, alignItems: "end" }}>
-                              <div style={styles.fieldBlock}>
-                                <label style={styles.fieldLabel}>Charge label</label>
-                                <input style={styles.input} value={entry.label} onChange={(e) => updateSituationFixedCharge(entry.id, "label", e.target.value)} />
-                              </div>
-                              <div style={styles.fieldBlock}>
-                                <label style={styles.fieldLabel}>Amount USD</label>
-                                <input style={styles.input} type="number" min="0" step="0.01" value={(Number(entry.amountTzs || 0) / USD_TO_TZS).toFixed(2)} onChange={(e) => updateSituationFixedCharge(entry.id, "amountTzs", e.target.value)} />
-                              </div>
-                              <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca" }} onClick={() => removeSituationFixedCharge(entry.id)}>Remove</button>
-                            </div>
-                          ))
-                        ) : (
-                          <div style={{ color: textSoft }}>No fixed charge added yet.</div>
-                        )}
+                        <KpiCard icon={<Wallet size={18} />} title="Cash Balance" value={formatUSD(cashBalanceUsd)} sub={formatTZS(cashBalanceUsd * Number(serviceForm?.exchangeRate || USD_TO_TZS)) + " — profit + injection"} valueColor={cashBalanceUsd >= 0 ? green : red} />
+                        <KpiCard icon={<TrendingUp size={18} />} title="Business Profit" value={formatUSD(businessProfitUsd)} sub={formatTZS(businessProfitTsh) + " — injection excluded"} valueColor={businessProfitUsd >= 0 ? green : red} />
                       </div>
                     </div>
                   </div>
-                </div>
-              )}
-
-              {profitTab === "cash-balance" && (
-                <div style={{ display: "grid", gap: 20 }}>
-                  <div style={{ ...styles.card, padding: 22 }}>
-                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: green, marginBottom: 6 }}>Section A — Business Profit Without Injection</div>
-                    <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 6 }}>Business Profit</div>
-                    <div style={{ padding: "10px 14px", borderRadius: 12, background: "rgba(31,143,95,0.07)", border: "1px solid rgba(31,143,95,0.14)", color: textMain, fontFamily: "monospace", fontSize: 13, marginBottom: 16 }}>
-                      Business Profit = Revenue − Product Charges − Ads Spend − Global Expenses
-                    </div>
-                    <div style={{ ...styles.softStat, marginBottom: 0, border: "1px solid rgba(31,143,95,0.12)", background: "rgba(240,253,245,0.8)", padding: "10px 14px", borderRadius: 12, fontSize: 12, color: textSoft }}>
-                      Owner injection is excluded from business profit. It does NOT count as revenue.
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(4, minmax(0, 1fr))", "1fr 1fr", "1fr"), gap: 16, marginTop: 16 }}>
-                      <KpiCard icon={<Wallet size={18} />} title="Revenue (Cash In)" value={formatUsdFromTzs(cashflowSummary.cashInTzs)} sub="Delivered orders only" valueColor={green} />
-                      <KpiCard icon={<Archive size={18} />} title="Variable Costs" value={formatUsdFromTzs(cashflowSummary.variableOutTzs)} sub="Ads + product cost + delivery" valueColor={amber} />
-                      <KpiCard icon={<Users size={18} />} title="Fixed Costs" value={formatUsdFromTzs(cashflowSummary.fixedOutTzs)} sub="Payroll + fixed charges" valueColor={amber} />
-                      <KpiCard icon={<TrendingUp size={18} />} title="Business Profit" value={formatUsdFromTzs(cashflowSummary.netCashTzs)} sub="Owner injection excluded" valueColor={cashflowSummary.netCashTzs >= 0 ? green : red} />
-                    </div>
-                  </div>
-
-                  <div style={{ ...styles.card, padding: 22 }}>
-                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: accent, marginBottom: 6 }}>Section B — Cash Balance With Injection</div>
-                    <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 6 }}>Cash Balance</div>
-                    <div style={{ padding: "10px 14px", borderRadius: 12, background: "rgba(29,95,208,0.07)", border: "1px solid rgba(29,95,208,0.14)", color: textMain, fontFamily: "monospace", fontSize: 13, marginBottom: 16 }}>
-                      Cash Balance = Revenue + Owner Injection − All Cash Out
-                    </div>
-                    <div style={{ ...styles.softStat, marginBottom: 0, border: "1px solid rgba(199,131,34,0.18)", background: "rgba(255,251,235,0.85)", padding: "10px 14px", borderRadius: 12, fontSize: 12, color: textSoft }}>
-                      Owner injection adds to the cash balance only. It does NOT affect business profit and is not counted as revenue.
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr 1fr", "1fr 1fr", "1fr"), gap: 16, marginTop: 16, alignItems: "end" }}>
-                      <div style={styles.fieldBlock}>
-                        <label style={styles.fieldLabel}>Owner Injection USD — does NOT affect business profit</label>
-                        <input
-                          style={styles.input}
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={(ownerInjectionTzs / USD_TO_TZS).toFixed(2)}
-                          onChange={(e) => setOwnerInjectionTzs(Math.max(0, parseLooseNumber(e.target.value) * USD_TO_TZS))}
-                          placeholder="0.00"
-                        />
-                      </div>
-                      <KpiCard icon={<Wallet size={18} />} title="Cash Balance With Injection" value={formatUsdFromTzs(cashflowSummary.netCashTzs + ownerInjectionTzs)} sub="Business profit + owner capital" valueColor={(cashflowSummary.netCashTzs + ownerInjectionTzs) >= 0 ? green : red} />
-                      <KpiCard icon={<TrendingUp size={18} />} title="Business Profit (unchanged)" value={formatUsdFromTzs(cashflowSummary.netCashTzs)} sub="Owner injection excluded — not affected" valueColor={cashflowSummary.netCashTzs >= 0 ? green : red} />
-                    </div>
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
             </div>
           )}

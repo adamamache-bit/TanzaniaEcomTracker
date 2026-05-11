@@ -506,3 +506,85 @@ export async function loadRevenueImportFromSupabase() {
     return null;
   }
 }
+
+// ── MANUAL ADS SPEND ──────────────────────────────────────────────────────────
+
+export async function loadManualAdsSpendFromSupabase() {
+  if (!supabaseEnabled || !supabase) return [];
+  try {
+    const { data, error } = await supabase.from("manual_ads_spend").select("*").order("week_start", { ascending: false });
+    if (error) { if (error.code === "42P01") return []; throw error; }
+    return (data || []).map((row) => ({
+      id: row.id,
+      weekStart: row.week_start || "",
+      weekEnd: row.week_end || "",
+      productId: row.product_id || "",
+      productName: row.product_name || "",
+      amountUsd: Number(row.amount_usd || 0),
+      amountTsh: Number(row.amount_tsh || 0),
+      notes: row.notes || "",
+      createdAt: row.created_at || "",
+    }));
+  } catch { return []; }
+}
+
+export async function saveManualAdsSpendToSupabase(entry) {
+  if (!supabaseEnabled || !supabase) return null;
+  const row = {
+    week_start: entry.weekStart,
+    week_end: entry.weekEnd,
+    product_id: entry.productId || "",
+    product_name: entry.productName || "",
+    amount_usd: Number(entry.amountUsd || 0),
+    amount_tsh: Number(entry.amountTsh || 0),
+    notes: entry.notes || "",
+  };
+  if (entry.id) row.id = entry.id;
+  const { data, error } = await supabase.from("manual_ads_spend").upsert([row], { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteManualAdsSpendFromSupabase(id) {
+  if (!supabaseEnabled || !supabase) return;
+  await supabase.from("manual_ads_spend").delete().eq("id", id);
+}
+
+// ── EXTRA CHARGES ─────────────────────────────────────────────────────────────
+
+export async function loadExtraChargesFromSupabase() {
+  if (!supabaseEnabled || !supabase) return [];
+  try {
+    const { data, error } = await supabase.from("extra_charges").select("*").order("date", { ascending: false });
+    if (error) { if (error.code === "42P01") return []; throw error; }
+    return (data || []).map((row) => ({
+      id: row.id,
+      date: row.date || "",
+      category: row.category || "other",
+      description: row.description || "",
+      amountUsd: Number(row.amount_usd || 0),
+      amountTsh: Number(row.amount_tsh || 0),
+      createdAt: row.created_at || "",
+    }));
+  } catch { return []; }
+}
+
+export async function saveExtraChargeToSupabase(entry) {
+  if (!supabaseEnabled || !supabase) return null;
+  const row = {
+    date: entry.date,
+    category: entry.category || "other",
+    description: entry.description || "",
+    amount_usd: Number(entry.amountUsd || 0),
+    amount_tsh: Number(entry.amountTsh || 0),
+  };
+  if (entry.id) row.id = entry.id;
+  const { data, error } = await supabase.from("extra_charges").upsert([row], { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteExtraChargeFromSupabase(id) {
+  if (!supabaseEnabled || !supabase) return;
+  await supabase.from("extra_charges").delete().eq("id", id);
+}
