@@ -132,7 +132,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
-import { checkNormalizedTablesEmpty, clearNormalizedProducts, deleteExtraChargeFromSupabase, deleteManualAdsSpendFromSupabase, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadExtraChargesFromSupabase, loadManualAdsSpendFromSupabase, loadProfitOverviewFromSupabase, loadRevenueImportFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, saveExtraChargeToSupabase, saveManualAdsSpendToSupabase, saveRevenueImportToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
+import { checkNormalizedTablesEmpty, clearNormalizedProducts, deleteExtraChargeFromSupabase, deleteManualAdsSpendFromSupabase, deleteOwnerInjectionFromSupabase, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadExtraChargesFromSupabase, loadManualAdsSpendFromSupabase, loadOwnerInjectionsFromSupabase, loadProfitOverviewFromSupabase, loadRevenueImportFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, saveExtraChargeToSupabase, saveManualAdsSpendToSupabase, saveOwnerInjectionToSupabase, saveRevenueImportToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -1015,7 +1015,9 @@ export default function App() {
   const [extraChargesForm, setExtraChargesForm] = useState({ date: "", category: "other", description: "", amountUsd: "", amountTsh: "" });
   const [extraChargesNotice, setExtraChargesNotice] = useState("");
   const [profitTab, setProfitTab] = useState("overview");
-  const [ownerInjectionTzs, setOwnerInjectionTzs] = useState(0);
+  const [ownerInjections, setOwnerInjections] = useState([]);
+  const [ownerInjectionForm, setOwnerInjectionForm] = useState({ date: "", amountUsd: "", amountTsh: "", notes: "" });
+  const [ownerInjectionNotice, setOwnerInjectionNotice] = useState("");
   const [simProductName, setSimProductName] = useState("");
   const [migrateNotice, setMigrateNotice] = useState("");
   const [migrating, setMigrating] = useState(false);
@@ -4517,6 +4519,7 @@ export default function App() {
       .catch(() => {});
     loadManualAdsSpendFromSupabase().then(setManualAdsSpend).catch(() => {});
     loadExtraChargesFromSupabase().then(setExtraCharges).catch(() => {});
+    loadOwnerInjectionsFromSupabase().then(setOwnerInjections).catch(() => {});
   }, []);
 
   const submitCloudAuth = async () => {
@@ -11973,12 +11976,16 @@ export default function App() {
 
               {/* ── CASH BALANCE TAB ── */}
               {profitTab === "cash-balance" && (() => {
+                const xrCb = Number(serviceForm?.exchangeRate || USD_TO_TZS);
                 const m = profitOverviewMetrics;
                 const businessProfitUsd = m.businessProfitUsd;
                 const businessProfitTsh = m.businessProfitTzs;
-                const cashBalanceUsd = businessProfitUsd + (ownerInjectionTzs / Number(serviceForm?.exchangeRate || USD_TO_TZS));
+                const totalInjectionUsd = ownerInjections.reduce((s, e) => s + Number(e.amountUsd || 0), 0);
+                const cashBalanceUsd = businessProfitUsd + totalInjectionUsd;
+                const cashBalanceTsh = cashBalanceUsd * xrCb;
                 return (
                   <div style={{ display: "grid", gap: 20 }}>
+                    {/* Section A — Business Profit */}
                     <div style={{ ...styles.card, padding: 22 }}>
                       <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: green, marginBottom: 6 }}>Section A — Business Profit</div>
                       <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 14 }}>Revenue − All Costs</div>
@@ -12006,21 +12013,146 @@ export default function App() {
                           </div>
                         </div>
                       </div>
-                      <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 10, background: "rgba(31,143,95,0.06)", border: "1px solid rgba(31,143,95,0.12)", fontSize: 12, color: textSoft }}>Owner injection is excluded. It does NOT count as revenue.</div>
+                      <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 10, background: "rgba(31,143,95,0.06)", border: "1px solid rgba(31,143,95,0.12)", fontSize: 12, color: textSoft }}>Owner injection is excluded from business profit. It does NOT count as revenue.</div>
                     </div>
 
+                    {/* Section B — Owner Injections */}
                     <div style={{ ...styles.card, padding: 22 }}>
-                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: accent, marginBottom: 6 }}>Section B — Cash Balance With Injection</div>
-                      <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 14 }}>Business Profit + Owner Injection</div>
-                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr 1fr", "1fr 1fr", "1fr"), gap: 16, alignItems: "end" }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: accent, marginBottom: 6 }}>Section B — Owner Injections</div>
+                      <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 4 }}>Capital Added by Owner</div>
+                      <div style={{ fontSize: 13, color: textSoft, marginBottom: 18 }}>Each injection is logged separately with a date and reason. Never affects Business Profit.</div>
+
+                      {/* Add injection form */}
+                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr 1fr 1fr auto", "1fr 1fr 1fr", "1fr"), gap: 12, marginBottom: 18, alignItems: "end" }}>
                         <div style={styles.fieldBlock}>
-                          <label style={styles.fieldLabel}>Owner Injection USD — does NOT affect business profit</label>
-                          <input style={styles.input} type="number" min="0" step="0.01" placeholder="0.00"
-                            value={(ownerInjectionTzs / Number(serviceForm?.exchangeRate || USD_TO_TZS)).toFixed(2)}
-                            onChange={(e) => setOwnerInjectionTzs(Math.max(0, parseLooseNumber(e.target.value) * Number(serviceForm?.exchangeRate || USD_TO_TZS)))} />
+                          <label style={styles.fieldLabel}>Date</label>
+                          <input style={styles.input} type="date" value={ownerInjectionForm.date}
+                            onChange={(e) => setOwnerInjectionForm((p) => ({ ...p, date: e.target.value }))} />
                         </div>
-                        <KpiCard icon={<Wallet size={18} />} title="Cash Balance" value={formatUSD(cashBalanceUsd)} sub={formatTZS(cashBalanceUsd * Number(serviceForm?.exchangeRate || USD_TO_TZS)) + " — profit + injection"} valueColor={cashBalanceUsd >= 0 ? green : red} />
-                        <KpiCard icon={<TrendingUp size={18} />} title="Business Profit" value={formatUSD(businessProfitUsd)} sub={formatTZS(businessProfitTsh) + " — injection excluded"} valueColor={businessProfitUsd >= 0 ? green : red} />
+                        <div style={styles.fieldBlock}>
+                          <label style={styles.fieldLabel}>Amount USD</label>
+                          <input style={styles.input} type="number" min="0" step="0.01" placeholder="0.00"
+                            value={ownerInjectionForm.amountUsd}
+                            onChange={(e) => {
+                              const usd = e.target.value;
+                              setOwnerInjectionForm((p) => ({ ...p, amountUsd: usd, amountTsh: usd !== "" ? (parseLooseNumber(usd) * xrCb).toFixed(0) : "" }));
+                            }} />
+                        </div>
+                        <div style={styles.fieldBlock}>
+                          <label style={styles.fieldLabel}>Amount TSh (auto)</label>
+                          <input style={styles.input} type="number" min="0" step="1" placeholder="0"
+                            value={ownerInjectionForm.amountTsh}
+                            onChange={(e) => {
+                              const tsh = e.target.value;
+                              setOwnerInjectionForm((p) => ({ ...p, amountTsh: tsh, amountUsd: tsh !== "" ? (parseLooseNumber(tsh) / xrCb).toFixed(2) : "" }));
+                            }} />
+                        </div>
+                        <div style={styles.fieldBlock}>
+                          <label style={styles.fieldLabel}>Notes (optional)</label>
+                          <input style={styles.input} type="text" placeholder="e.g. restocking capital"
+                            value={ownerInjectionForm.notes}
+                            onChange={(e) => setOwnerInjectionForm((p) => ({ ...p, notes: e.target.value }))} />
+                        </div>
+                        <button style={{ ...styles.btnPrimary, whiteSpace: "nowrap" }} onClick={async () => {
+                          if (!ownerInjectionForm.date || !ownerInjectionForm.amountUsd) {
+                            setOwnerInjectionNotice("Date and Amount USD are required.");
+                            setTimeout(() => setOwnerInjectionNotice(""), 3000);
+                            return;
+                          }
+                          const entry = {
+                            id: ownerInjectionForm.editId || undefined,
+                            date: ownerInjectionForm.date,
+                            amountUsd: parseLooseNumber(ownerInjectionForm.amountUsd),
+                            amountTsh: parseLooseNumber(ownerInjectionForm.amountTsh) || parseLooseNumber(ownerInjectionForm.amountUsd) * xrCb,
+                            notes: ownerInjectionForm.notes.trim(),
+                          };
+                          try {
+                            const saved = await saveOwnerInjectionToSupabase(entry);
+                            if (saved) {
+                              setOwnerInjections((prev) => {
+                                const filtered = prev.filter((e) => e.id !== saved.id);
+                                return [{ id: saved.id, date: saved.date, amountUsd: Number(saved.amount_usd), amountTsh: Number(saved.amount_tsh), notes: saved.notes || "" }, ...filtered].sort((a, b) => b.date.localeCompare(a.date));
+                              });
+                            } else {
+                              const localEntry = { ...entry, id: entry.id || `local-${Date.now()}` };
+                              setOwnerInjections((prev) => [localEntry, ...prev.filter((e) => e.id !== localEntry.id)].sort((a, b) => b.date.localeCompare(a.date)));
+                            }
+                            setOwnerInjectionForm({ date: "", amountUsd: "", amountTsh: "", notes: "" });
+                            setOwnerInjectionNotice("Injection saved.");
+                          } catch {
+                            setOwnerInjectionNotice("Failed to save. Check Supabase connection.");
+                          }
+                          setTimeout(() => setOwnerInjectionNotice(""), 3000);
+                        }}>+ Add Injection</button>
+                      </div>
+                      {ownerInjectionNotice && <div style={{ fontSize: 12, color: accent, marginBottom: 12 }}>{ownerInjectionNotice}</div>}
+
+                      {/* Entries table */}
+                      {ownerInjections.length === 0 ? (
+                        <div style={{ fontSize: 13, color: textSoft, padding: "16px 0" }}>No injections recorded yet.</div>
+                      ) : (
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                            <thead>
+                              <tr style={{ borderBottom: `2px solid ${cardBorder}` }}>
+                                {["Date", "Amount USD", "Amount TSh", "Notes", ""].map((h) => (
+                                  <th key={h} style={{ textAlign: "left", padding: "6px 10px", fontWeight: 700, color: textSoft, fontSize: 11, textTransform: "uppercase" }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {ownerInjections.map((inj, i) => (
+                                <tr key={inj.id} style={{ borderBottom: i < ownerInjections.length - 1 ? `1px solid ${cardBorder}` : "none", background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)" }}>
+                                  <td style={{ padding: "9px 10px", fontWeight: 600 }}>{inj.date}</td>
+                                  <td style={{ padding: "9px 10px", fontWeight: 700, color: green }}>{formatUSD(inj.amountUsd)}</td>
+                                  <td style={{ padding: "9px 10px", color: textSoft }}>{formatTZS(inj.amountTsh)}</td>
+                                  <td style={{ padding: "9px 10px", color: textSoft, maxWidth: 200 }}>{inj.notes || "—"}</td>
+                                  <td style={{ padding: "9px 10px" }}>
+                                    <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca", padding: "4px 10px", fontSize: 12 }} onClick={async () => {
+                                      await deleteOwnerInjectionFromSupabase(inj.id).catch(() => {});
+                                      setOwnerInjections((prev) => prev.filter((e) => e.id !== inj.id));
+                                    }}>Remove</button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr style={{ borderTop: `2px solid ${cardBorder}` }}>
+                                <td style={{ padding: "10px 10px", fontWeight: 900 }}>Total ({ownerInjections.length})</td>
+                                <td style={{ padding: "10px 10px", fontWeight: 900, color: green }}>{formatUSD(totalInjectionUsd)}</td>
+                                <td style={{ padding: "10px 10px", color: textSoft }}>{formatTZS(totalInjectionUsd * xrCb)}</td>
+                                <td colSpan={2} />
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Section C — Cash Balance */}
+                    <div style={{ ...styles.card, padding: 22 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: accent, marginBottom: 6 }}>Section C — Cash Balance</div>
+                      <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 18 }}>Business Profit + Owner Injections</div>
+                      <div style={{ display: "grid", gap: 0 }}>
+                        {[
+                          { label: "Business Profit", v: businessProfitUsd, tsh: businessProfitTsh, c: businessProfitUsd >= 0 ? green : red, sign: businessProfitUsd >= 0 ? "+" : "−" },
+                          { label: `Owner Injections (${ownerInjections.length})`, v: totalInjectionUsd, tsh: totalInjectionUsd * xrCb, c: accent, sign: "+" },
+                        ].map((r, i, arr) => (
+                          <div key={r.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: i < arr.length - 1 ? `1px solid ${cardBorder}` : "none" }}>
+                            <span style={{ fontWeight: 600 }}>{r.sign} {r.label}</span>
+                            <div style={{ textAlign: "right" }}>
+                              <div style={{ fontWeight: 800, color: r.c }}>{formatUSD(Math.abs(r.v))}</div>
+                              <div style={{ fontSize: 11, color: textSoft }}>{formatTZS(Math.abs(r.tsh))}</div>
+                            </div>
+                          </div>
+                        ))}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0", marginTop: 4, borderTop: `2px solid ${cardBorder}` }}>
+                          <span style={{ fontSize: 18, fontWeight: 900 }}>= Cash Balance</span>
+                          <div style={{ textAlign: "right" }}>
+                            <div style={{ fontSize: 24, fontWeight: 900, color: cashBalanceUsd >= 0 ? green : red }}>{formatUSD(cashBalanceUsd)}</div>
+                            <div style={{ fontSize: 12, color: textSoft }}>{formatTZS(cashBalanceTsh)}</div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>

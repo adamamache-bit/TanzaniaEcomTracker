@@ -588,3 +588,40 @@ export async function deleteExtraChargeFromSupabase(id) {
   if (!supabaseEnabled || !supabase) return;
   await supabase.from("extra_charges").delete().eq("id", id);
 }
+
+// ── OWNER INJECTIONS ──────────────────────────────────────────────────────────
+
+export async function loadOwnerInjectionsFromSupabase() {
+  if (!supabaseEnabled || !supabase) return [];
+  try {
+    const { data, error } = await supabase.from("owner_injections").select("*").order("date", { ascending: false });
+    if (error) { if (error.code === "42P01") return []; throw error; }
+    return (data || []).map((row) => ({
+      id: row.id,
+      date: row.date || "",
+      amountUsd: Number(row.amount_usd || 0),
+      amountTsh: Number(row.amount_tsh || 0),
+      notes: row.notes || "",
+      createdAt: row.created_at || "",
+    }));
+  } catch { return []; }
+}
+
+export async function saveOwnerInjectionToSupabase(entry) {
+  if (!supabaseEnabled || !supabase) return null;
+  const row = {
+    date: entry.date,
+    amount_usd: Number(entry.amountUsd || 0),
+    amount_tsh: Number(entry.amountTsh || 0),
+    notes: entry.notes || "",
+  };
+  if (entry.id) row.id = entry.id;
+  const { data, error } = await supabase.from("owner_injections").upsert([row], { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteOwnerInjectionFromSupabase(id) {
+  if (!supabaseEnabled || !supabase) return;
+  await supabase.from("owner_injections").delete().eq("id", id);
+}
