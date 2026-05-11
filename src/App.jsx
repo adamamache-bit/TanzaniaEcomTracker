@@ -165,6 +165,20 @@ const AUTO_BACKUP_META_KEY = "tanzania-ecom-tracker-auto-backup-meta-v1";
 const IMPORT_META_KEY = "tanzania-ecom-tracker-import-meta-v1";
 const DEFAULT_PAGE_DATE_PRESET = "last30Days";
 
+// Profit Center localStorage keys (fallback when Supabase unavailable or tables not yet created)
+const LS_MANUAL_ADS = "profit_manual_ads_v1";
+const LS_EXTRA_CHARGES = "profit_extra_charges_v1";
+const LS_OWNER_INJECTIONS = "profit_owner_injections_v1";
+const LS_REVENUE_ROWS = "profit_revenue_rows_v1";
+const LS_REVENUE_IMPORT = "profit_revenue_import_v1";
+
+function readLS(key) {
+  try { return JSON.parse(localStorage.getItem(key) || "null"); } catch { return null; }
+}
+function writeLS(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch { void 0; }
+}
+
 function createPageDateFilterState(preset = DEFAULT_PAGE_DATE_PRESET) {
   const range = getDateRangeFromPreset(preset);
   return {
@@ -4516,12 +4530,35 @@ export default function App() {
       .then((result) => { if (result) setProfitOverviewDirect(result); })
       .catch(() => {});
     loadRevenueImportFromSupabase()
-      .then((result) => { if (result) setRevenueImport(result); })
-      .catch(() => {});
-    loadRevenueImportRowsFromSupabase().then(setRevenueImportRows).catch(() => {});
-    loadManualAdsSpendFromSupabase().then(setManualAdsSpend).catch(() => {});
-    loadExtraChargesFromSupabase().then(setExtraCharges).catch(() => {});
-    loadOwnerInjectionsFromSupabase().then(setOwnerInjections).catch(() => {});
+      .then((result) => {
+        if (result) { setRevenueImport(result); writeLS(LS_REVENUE_IMPORT, result); }
+        else { const local = readLS(LS_REVENUE_IMPORT); if (local) setRevenueImport(local); }
+      })
+      .catch(() => { const local = readLS(LS_REVENUE_IMPORT); if (local) setRevenueImport(local); });
+    loadRevenueImportRowsFromSupabase()
+      .then((rows) => {
+        if (rows && Object.keys(rows).length > 0) { setRevenueImportRows(rows); writeLS(LS_REVENUE_ROWS, rows); }
+        else { const local = readLS(LS_REVENUE_ROWS); if (local && Object.keys(local).length > 0) setRevenueImportRows(local); }
+      })
+      .catch(() => { const local = readLS(LS_REVENUE_ROWS); if (local && Object.keys(local).length > 0) setRevenueImportRows(local); });
+    loadManualAdsSpendFromSupabase()
+      .then((rows) => {
+        if (rows.length > 0) { setManualAdsSpend(rows); writeLS(LS_MANUAL_ADS, rows); }
+        else { const local = readLS(LS_MANUAL_ADS); if (Array.isArray(local) && local.length > 0) setManualAdsSpend(local); }
+      })
+      .catch(() => { const local = readLS(LS_MANUAL_ADS); if (Array.isArray(local) && local.length > 0) setManualAdsSpend(local); });
+    loadExtraChargesFromSupabase()
+      .then((rows) => {
+        if (rows.length > 0) { setExtraCharges(rows); writeLS(LS_EXTRA_CHARGES, rows); }
+        else { const local = readLS(LS_EXTRA_CHARGES); if (Array.isArray(local) && local.length > 0) setExtraCharges(local); }
+      })
+      .catch(() => { const local = readLS(LS_EXTRA_CHARGES); if (Array.isArray(local) && local.length > 0) setExtraCharges(local); });
+    loadOwnerInjectionsFromSupabase()
+      .then((rows) => {
+        if (rows.length > 0) { setOwnerInjections(rows); writeLS(LS_OWNER_INJECTIONS, rows); }
+        else { const local = readLS(LS_OWNER_INJECTIONS); if (Array.isArray(local) && local.length > 0) setOwnerInjections(local); }
+      })
+      .catch(() => { const local = readLS(LS_OWNER_INJECTIONS); if (Array.isArray(local) && local.length > 0) setOwnerInjections(local); });
   }, []);
 
   const submitCloudAuth = async () => {
@@ -5170,6 +5207,8 @@ export default function App() {
 
         setRevenueImportRows(mergedRows);
         setRevenueImport(data);
+        writeLS(LS_REVENUE_ROWS, mergedRows);
+        writeLS(LS_REVENUE_IMPORT, data);
         setRevenueImportNotice(
           `Last import: ${new Date().toLocaleDateString()} — ${newCount} new orders added, ${updatedCount} orders updated, ${deliveredCount} total delivered`
         );
@@ -11861,6 +11900,7 @@ export default function App() {
                 const addEntry = async () => {
                   if (!manualAdsForm.weekStart || !manualAdsForm.weekEnd || !manualAdsForm.amountUsd) {
                     setManualAdsNotice("Week start, week end and amount are required.");
+                    setTimeout(() => setManualAdsNotice(""), 3000);
                     return;
                   }
                   const amtUsd = Number(manualAdsForm.amountUsd) || 0;
@@ -11871,17 +11911,27 @@ export default function App() {
                     amountUsd: amtUsd, amountTsh: amtUsd * xr,
                     notes: manualAdsForm.notes || "",
                   };
+                  // Optimistic: add immediately so data is never lost
+                  const localId = `local-${Date.now()}`;
+                  const localEntry = { ...entry, id: localId, createdAt: new Date().toISOString() };
+                  setManualAdsSpend((prev) => { const next = [localEntry, ...prev]; writeLS(LS_MANUAL_ADS, next); return next; });
+                  setManualAdsForm({ weekStart: "", weekEnd: "", productId: "", productName: "", amountUsd: "", notes: "" });
+                  setManualAdsNotice("Saving…");
+                  // Persist to Supabase in background
                   try {
                     const saved = await saveManualAdsSpendToSupabase(entry);
-                    const newEntry = { ...entry, id: saved?.id || `local-${Date.now()}`, createdAt: saved?.created_at || new Date().toISOString() };
-                    setManualAdsSpend((prev) => [newEntry, ...prev]);
-                    setManualAdsForm({ weekStart: "", weekEnd: "", productId: "", productName: "", amountUsd: "", notes: "" });
-                    setManualAdsNotice("Ads entry saved.");
-                  } catch { setManualAdsNotice("Failed to save."); }
+                    if (saved?.id) {
+                      setManualAdsSpend((prev) => { const next = prev.map((e) => e.id === localId ? { ...localEntry, id: saved.id, createdAt: saved.created_at || localEntry.createdAt } : e); writeLS(LS_MANUAL_ADS, next); return next; });
+                    }
+                    setManualAdsNotice("Saved.");
+                  } catch (err) {
+                    setManualAdsNotice(err?.code === "42P01" ? "Saved locally — run SQL migration 004 in Supabase to enable cloud sync." : "Saved locally (Supabase unavailable).");
+                  }
+                  setTimeout(() => setManualAdsNotice(""), 5000);
                 };
                 const removeEntry = async (id) => {
-                  await deleteManualAdsSpendFromSupabase(id).catch(() => {});
-                  setManualAdsSpend((prev) => prev.filter((e) => e.id !== id));
+                  setManualAdsSpend((prev) => { const next = prev.filter((e) => e.id !== id); writeLS(LS_MANUAL_ADS, next); return next; });
+                  if (!String(id).startsWith("local-")) await deleteManualAdsSpendFromSupabase(id).catch(() => {});
                 };
                 const totalManualUsd = manualAdsSpend.reduce((s, e) => s + Number(e.amountUsd || 0), 0);
                 const metaTotal = profitOverviewMetrics.metaAdsUsd;
@@ -11944,6 +11994,7 @@ export default function App() {
                 const addEntry = async () => {
                   if (!extraChargesForm.date || (!extraChargesForm.amountUsd && !extraChargesForm.amountTsh)) {
                     setExtraChargesNotice("Date and amount are required.");
+                    setTimeout(() => setExtraChargesNotice(""), 3000);
                     return;
                   }
                   const amtUsd = Number(extraChargesForm.amountUsd) || (Number(extraChargesForm.amountTsh) / xr);
@@ -11954,17 +12005,27 @@ export default function App() {
                     description: extraChargesForm.description || "",
                     amountUsd: amtUsd, amountTsh: amtTsh,
                   };
+                  // Optimistic: add immediately so data is never lost
+                  const localId = `local-${Date.now()}`;
+                  const localEntry = { ...entry, id: localId, createdAt: new Date().toISOString() };
+                  setExtraCharges((prev) => { const next = [localEntry, ...prev]; writeLS(LS_EXTRA_CHARGES, next); return next; });
+                  setExtraChargesForm({ date: "", category: "other", description: "", amountUsd: "", amountTsh: "" });
+                  setExtraChargesNotice("Saving…");
+                  // Persist to Supabase in background
                   try {
                     const saved = await saveExtraChargeToSupabase(entry);
-                    const newEntry = { ...entry, id: saved?.id || `local-${Date.now()}`, createdAt: saved?.created_at || new Date().toISOString() };
-                    setExtraCharges((prev) => [newEntry, ...prev]);
-                    setExtraChargesForm({ date: "", category: "other", description: "", amountUsd: "", amountTsh: "" });
-                    setExtraChargesNotice("Charge saved.");
-                  } catch { setExtraChargesNotice("Failed to save."); }
+                    if (saved?.id) {
+                      setExtraCharges((prev) => { const next = prev.map((e) => e.id === localId ? { ...localEntry, id: saved.id, createdAt: saved.created_at || localEntry.createdAt } : e); writeLS(LS_EXTRA_CHARGES, next); return next; });
+                    }
+                    setExtraChargesNotice("Saved.");
+                  } catch (err) {
+                    setExtraChargesNotice(err?.code === "42P01" ? "Saved locally — run SQL migration 004 in Supabase to enable cloud sync." : "Saved locally (Supabase unavailable).");
+                  }
+                  setTimeout(() => setExtraChargesNotice(""), 5000);
                 };
                 const removeEntry = async (id) => {
-                  await deleteExtraChargeFromSupabase(id).catch(() => {});
-                  setExtraCharges((prev) => prev.filter((e) => e.id !== id));
+                  setExtraCharges((prev) => { const next = prev.filter((e) => e.id !== id); writeLS(LS_EXTRA_CHARGES, next); return next; });
+                  if (!String(id).startsWith("local-")) await deleteExtraChargeFromSupabase(id).catch(() => {});
                 };
                 const totalUsd = extraCharges.reduce((s, e) => s + Number(e.amountUsd || 0), 0);
                 const byCategory = CATEGORIES.map((cat) => ({ cat, total: extraCharges.filter((e) => e.category === cat).reduce((s, e) => s + Number(e.amountUsd || 0), 0) })).filter((x) => x.total > 0);
@@ -12105,23 +12166,27 @@ export default function App() {
                             amountTsh: parseLooseNumber(ownerInjectionForm.amountTsh) || parseLooseNumber(ownerInjectionForm.amountUsd) * xrCb,
                             notes: ownerInjectionForm.notes.trim(),
                           };
+                          // Optimistic: add immediately so data is never lost
+                          const localId = `local-${Date.now()}`;
+                          const localEntry = { ...entry, id: localId, createdAt: new Date().toISOString() };
+                          setOwnerInjections((prev) => { const next = [localEntry, ...prev.filter((e) => e.id !== localId)].sort((a, b) => b.date.localeCompare(a.date)); writeLS(LS_OWNER_INJECTIONS, next); return next; });
+                          setOwnerInjectionForm({ date: "", amountUsd: "", amountTsh: "", notes: "" });
+                          setOwnerInjectionNotice("Saving…");
+                          // Persist to Supabase in background
                           try {
                             const saved = await saveOwnerInjectionToSupabase(entry);
-                            if (saved) {
+                            if (saved?.id) {
                               setOwnerInjections((prev) => {
-                                const filtered = prev.filter((e) => e.id !== saved.id);
-                                return [{ id: saved.id, date: saved.date, amountUsd: Number(saved.amount_usd), amountTsh: Number(saved.amount_tsh), notes: saved.notes || "" }, ...filtered].sort((a, b) => b.date.localeCompare(a.date));
+                                const next = prev.map((e) => e.id === localId ? { id: saved.id, date: saved.date, amountUsd: Number(saved.amount_usd), amountTsh: Number(saved.amount_tsh), notes: saved.notes || "", createdAt: saved.created_at || localEntry.createdAt } : e).sort((a, b) => b.date.localeCompare(a.date));
+                                writeLS(LS_OWNER_INJECTIONS, next);
+                                return next;
                               });
-                            } else {
-                              const localEntry = { ...entry, id: entry.id || `local-${Date.now()}` };
-                              setOwnerInjections((prev) => [localEntry, ...prev.filter((e) => e.id !== localEntry.id)].sort((a, b) => b.date.localeCompare(a.date)));
                             }
-                            setOwnerInjectionForm({ date: "", amountUsd: "", amountTsh: "", notes: "" });
-                            setOwnerInjectionNotice("Injection saved.");
-                          } catch {
-                            setOwnerInjectionNotice("Failed to save. Check Supabase connection.");
+                            setOwnerInjectionNotice("Saved.");
+                          } catch (err) {
+                            setOwnerInjectionNotice(err?.code === "42P01" ? "Saved locally — run SQL migration 005 in Supabase to enable cloud sync." : "Saved locally (Supabase unavailable).");
                           }
-                          setTimeout(() => setOwnerInjectionNotice(""), 3000);
+                          setTimeout(() => setOwnerInjectionNotice(""), 5000);
                         }}>+ Add Injection</button>
                       </div>
                       {ownerInjectionNotice && <div style={{ fontSize: 12, color: accent, marginBottom: 12 }}>{ownerInjectionNotice}</div>}
@@ -12148,8 +12213,8 @@ export default function App() {
                                   <td style={{ padding: "9px 10px", color: textSoft, maxWidth: 200 }}>{inj.notes || "—"}</td>
                                   <td style={{ padding: "9px 10px" }}>
                                     <button style={{ ...styles.btnSecondary, background: "#fef2f2", color: red, border: "1px solid #fecaca", padding: "4px 10px", fontSize: 12 }} onClick={async () => {
-                                      await deleteOwnerInjectionFromSupabase(inj.id).catch(() => {});
-                                      setOwnerInjections((prev) => prev.filter((e) => e.id !== inj.id));
+                                      setOwnerInjections((prev) => { const next = prev.filter((e) => e.id !== inj.id); writeLS(LS_OWNER_INJECTIONS, next); return next; });
+                                      if (!String(inj.id).startsWith("local-")) await deleteOwnerInjectionFromSupabase(inj.id).catch(() => {});
                                     }}>Remove</button>
                                   </td>
                                 </tr>
