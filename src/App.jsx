@@ -1037,6 +1037,7 @@ export default function App() {
   const [ownerInjectionForm, setOwnerInjectionForm] = useState({ date: "", amountUsd: "", amountTsh: "", notes: "" });
   const [ownerInjectionNotice, setOwnerInjectionNotice] = useState("");
   const [simProductName, setSimProductName] = useState("");
+  const [simInputs, setSimInputs] = useState({ totalLeads: "", confirmationRate: "", deliveryRate: "", cpl: "", sellingPriceTsh: "", productCostUsd: "", serviceFeePerUnit: "9" });
   const [migrateNotice, setMigrateNotice] = useState("");
   const [migrating, setMigrating] = useState(false);
   const [syncNotice, setSyncNotice] = useState("");
@@ -11777,6 +11778,7 @@ export default function App() {
                   { value: "ads-spend", label: "Ads Spend" },
                   { value: "extra-charges", label: "Extra Charges" },
                   { value: "cash-balance", label: "Cash Balance" },
+                  { value: "simulator", label: "Product Simulator" },
                 ]}
                 value={profitTab}
                 onChange={setProfitTab}
@@ -12261,6 +12263,161 @@ export default function App() {
                           </div>
                         </div>
                       </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── PRODUCT SIMULATOR TAB ── */}
+              {profitTab === "simulator" && (() => {
+                const xrSim = 2850;
+                const n = (key) => parseLooseNumber(simInputs[key] || "0");
+                const totalLeads = n("totalLeads");
+                const confirmRate = n("confirmationRate") / 100;
+                const delivRate = n("deliveryRate") / 100;
+                const cpl = n("cpl");
+                const sellingPriceTsh = n("sellingPriceTsh");
+                const productCostUsd = n("productCostUsd");
+                const serviceFee = n("serviceFeePerUnit") || 9;
+
+                const confirmedLeads = totalLeads * confirmRate;
+                const deliveredLeads = confirmedLeads * delivRate;
+                const totalAdsSpend = totalLeads * cpl;
+                const revenueTsh = deliveredLeads * sellingPriceTsh;
+                const revenueUsd = revenueTsh / xrSim;
+                const productCostTotal = deliveredLeads * productCostUsd;
+                const serviceFeeTotal = deliveredLeads * serviceFee;
+                const sellingPriceUsd = sellingPriceTsh / xrSim;
+                const adsCostPerDelivered = deliveredLeads > 0 ? totalAdsSpend / deliveredLeads : 0;
+                const profitPerUnit = sellingPriceUsd - productCostUsd - adsCostPerDelivered - serviceFee;
+                const totalProfitUsd = deliveredLeads * profitPerUnit;
+                const totalProfitTsh = totalProfitUsd * xrSim;
+                const maxCpl = deliveredLeads > 0 && totalLeads > 0
+                  ? (sellingPriceUsd - productCostUsd - serviceFee) * (deliveredLeads / totalLeads)
+                  : 0;
+                const roi = totalAdsSpend > 0 ? (totalProfitUsd / totalAdsSpend) * 100 : 0;
+                const hasInputs = totalLeads > 0 && deliveredLeads > 0;
+                const isProfit = totalProfitUsd >= 0;
+                const isCplGood = maxCpl >= cpl;
+
+                const simField = (label, key, opts = {}) => (
+                  <div style={styles.fieldBlock}>
+                    <label style={styles.fieldLabel}>{label}</label>
+                    <input
+                      style={styles.input}
+                      type="number"
+                      min="0"
+                      step={opts.step || "any"}
+                      placeholder={opts.placeholder || "0"}
+                      value={simInputs[key]}
+                      onChange={(e) => setSimInputs((prev) => ({ ...prev, [key]: e.target.value }))}
+                    />
+                  </div>
+                );
+
+                return (
+                  <div style={{ display: "grid", gap: 16 }}>
+                    {/* Inputs */}
+                    <div style={{ ...styles.card, padding: 22 }}>
+                      <div style={styles.sectionEyebrow}>Product Simulator</div>
+                      <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6, marginBottom: 18 }}>Enter your numbers</div>
+                      <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 14 }}>
+                        {simField("Total Leads", "totalLeads")}
+                        {simField("Confirmation Rate %", "confirmationRate", { placeholder: "45" })}
+                        {simField("Delivery Rate %", "deliveryRate", { placeholder: "30" })}
+                        {simField("CPL — Cost Per Lead (USD)", "cpl", { step: "0.01", placeholder: "0.50" })}
+                        {simField("Selling Price (TSh)", "sellingPriceTsh", { placeholder: "50000" })}
+                        {simField("Product Cost (USD)", "productCostUsd", { step: "0.01", placeholder: "5.00" })}
+                        <div style={styles.fieldBlock}>
+                          <label style={styles.fieldLabel}>Service Fee / Unit (USD)</label>
+                          <select
+                            style={styles.input}
+                            value={simInputs.serviceFeePerUnit}
+                            onChange={(e) => setSimInputs((prev) => ({ ...prev, serviceFeePerUnit: e.target.value }))}
+                          >
+                            <option value="9">$9 — Standard</option>
+                            <option value="8">$8 — Dar es Salaam</option>
+                            <option value="7">$7 — DSM discounted</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Funnel + Financial side by side */}
+                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("1fr 1fr", "1fr", "1fr"), gap: 16 }}>
+                      {/* Funnel */}
+                      <div style={{ ...styles.card, padding: 22 }}>
+                        <div style={styles.sectionEyebrow}>Funnel</div>
+                        <div style={{ fontSize: 18, fontWeight: 900, marginTop: 6, marginBottom: 18 }}>Lead → Confirmed → Delivered</div>
+                        {[
+                          { label: "Total Leads", value: hasInputs ? Math.round(totalLeads).toLocaleString() : "—", color: textMain },
+                          { label: `Confirmed (${simInputs.confirmationRate || 0}%)`, value: hasInputs ? Math.round(confirmedLeads).toLocaleString() : "—", color: accent },
+                          { label: `Delivered (${simInputs.deliveryRate || 0}%)`, value: hasInputs ? Math.round(deliveredLeads).toLocaleString() : "—", color: green },
+                        ].map((row, i, arr) => (
+                          <div key={row.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: i < arr.length - 1 ? `1px solid ${cardBorder}` : "none" }}>
+                            <span style={{ fontWeight: 600 }}>{row.label}</span>
+                            <span style={{ fontSize: 22, fontWeight: 900, color: row.color }}>{row.value}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Financial results */}
+                      <div style={{ ...styles.card, padding: 22 }}>
+                        <div style={styles.sectionEyebrow}>Financial Results</div>
+                        <div style={{ fontSize: 18, fontWeight: 900, marginTop: 6, marginBottom: 18 }}>Revenue → Costs → Profit</div>
+                        {[
+                          { label: "Revenue", value: hasInputs ? formatUSD(revenueUsd) : "—", sub: hasInputs ? formatTZS(revenueTsh) : "", color: green },
+                          { label: "− Product Cost", value: hasInputs ? formatUSD(productCostTotal) : "—", sub: hasInputs ? `$${productCostUsd.toFixed(2)} × ${Math.round(deliveredLeads)} units` : "", color: amber },
+                          { label: "− Service Fees", value: hasInputs ? formatUSD(serviceFeeTotal) : "—", sub: hasInputs ? `$${serviceFee} × ${Math.round(deliveredLeads)} units` : "", color: amber },
+                          { label: "− Ads Spend", value: hasInputs ? formatUSD(totalAdsSpend) : "—", sub: hasInputs ? `$${cpl.toFixed(2)} CPL × ${Math.round(totalLeads)} leads` : "", color: amber },
+                        ].map((row, i, arr) => (
+                          <div key={row.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: i < arr.length - 1 ? `1px solid ${cardBorder}` : "none" }}>
+                            <div>
+                              <span style={{ fontWeight: 600 }}>{row.label}</span>
+                              {row.sub && <div style={{ fontSize: 11, color: textSoft, marginTop: 2 }}>{row.sub}</div>}
+                            </div>
+                            <span style={{ fontWeight: 800, color: row.color }}>{row.value}</span>
+                          </div>
+                        ))}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0", marginTop: 4, borderTop: `2px solid ${cardBorder}` }}>
+                          <span style={{ fontSize: 16, fontWeight: 900 }}>= Total Profit</span>
+                          <div style={{ textAlign: "right" }}>
+                            <div style={{ fontSize: 22, fontWeight: 900, color: isProfit ? green : red }}>{hasInputs ? formatUSD(totalProfitUsd) : "—"}</div>
+                            {hasInputs && <div style={{ fontSize: 11, color: textSoft }}>{formatTZS(totalProfitTsh)}</div>}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Key metrics */}
+                    <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 14 }}>
+                      <KpiCard
+                        icon={<Wallet size={18} />}
+                        title="Profit / Unit"
+                        value={hasInputs ? formatUSD(profitPerUnit) : "—"}
+                        sub="Per delivered unit after all costs"
+                        valueColor={profitPerUnit >= 0 ? green : red}
+                      />
+                      <KpiCard
+                        icon={<Calculator size={18} />}
+                        title="Max CPL (Break-even)"
+                        value={hasInputs ? formatUSD(maxCpl) : "—"}
+                        sub={
+                          hasInputs && cpl > 0
+                            ? isCplGood
+                              ? `Your CPL $${cpl.toFixed(2)} — profitable`
+                              : `Your CPL $${cpl.toFixed(2)} — losing money`
+                            : "Enter CPL to compare"
+                        }
+                        valueColor={hasInputs && cpl > 0 ? (isCplGood ? green : red) : textMain}
+                      />
+                      <KpiCard
+                        icon={<TrendingUp size={18} />}
+                        title="ROI"
+                        value={hasInputs && totalAdsSpend > 0 ? `${roi.toFixed(1)}%` : "—"}
+                        sub="Total Profit / Total Ads Spend"
+                        valueColor={roi >= 0 ? green : red}
+                      />
                     </div>
                   </div>
                 );
