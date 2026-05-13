@@ -11778,7 +11778,7 @@ export default function App() {
                   { value: "ads-spend", label: "Ads Spend" },
                   { value: "extra-charges", label: "Extra Charges" },
                   { value: "cash-balance", label: "Cash Balance" },
-                  { value: "simulator", label: "Product Simulator" },
+                  { value: "simulator", label: "Simulator" },
                 ]}
                 value={profitTab}
                 onChange={setProfitTab}
@@ -12319,7 +12319,7 @@ export default function App() {
                   <div style={{ display: "grid", gap: 16 }}>
                     {/* Inputs */}
                     <div style={{ ...styles.card, padding: 22 }}>
-                      <div style={styles.sectionEyebrow}>Product Simulator</div>
+                      <div style={styles.sectionEyebrow}>Simulator</div>
                       <div style={{ fontSize: 20, fontWeight: 900, marginTop: 6, marginBottom: 18 }}>Enter your numbers</div>
                       <div style={{ display: "grid", gridTemplateColumns: responsiveColumns("repeat(3, minmax(0, 1fr))", "repeat(2, minmax(0, 1fr))", "1fr"), gap: 14 }}>
                         {simField("Total Leads", "totalLeads")}
@@ -12328,18 +12328,7 @@ export default function App() {
                         {simField("CPL — Cost Per Lead (USD)", "cpl", { step: "0.01", placeholder: "0.50" })}
                         {simField("Selling Price (TSh)", "sellingPriceTsh", { placeholder: "50000" })}
                         {simField("Product Cost (USD)", "productCostUsd", { step: "0.01", placeholder: "5.00" })}
-                        <div style={styles.fieldBlock}>
-                          <label style={styles.fieldLabel}>Service Fee / Unit (USD)</label>
-                          <select
-                            style={styles.input}
-                            value={simInputs.serviceFeePerUnit}
-                            onChange={(e) => setSimInputs((prev) => ({ ...prev, serviceFeePerUnit: e.target.value }))}
-                          >
-                            <option value="9">$9 — Standard</option>
-                            <option value="8">$8 — Dar es Salaam</option>
-                            <option value="7">$7 — DSM discounted</option>
-                          </select>
-                        </div>
+                        {simField("Service Fee / Unit (USD)", "serviceFeePerUnit", { step: "0.01", placeholder: "9" })}
                       </div>
                     </div>
 
