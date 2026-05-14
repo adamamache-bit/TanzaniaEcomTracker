@@ -1396,7 +1396,9 @@ export default function App() {
       setResetOrdersConfirm(false);
       setResetOrdersNotice("Orders cleared. You can now re-import your Excel files.");
     } catch (err) {
-      setResetOrdersNotice(`Reset failed: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : (err?.message || JSON.stringify(err) || "Unknown error");
+      console.error("Reset orders failed:", msg, err);
+      setResetOrdersNotice(`Reset failed: ${msg}`);
     }
   }, []);
 
