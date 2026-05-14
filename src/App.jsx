@@ -1384,7 +1384,14 @@ export default function App() {
   const handleResetOrders = useCallback(async () => {
     setResetOrdersNotice("Clearing...");
     try {
-      if (supabaseEnabled) await clearNormalizedOrders();
+      if (supabaseEnabled) {
+        try {
+          await clearNormalizedOrders();
+        } catch (deleteErr) {
+          // normalized orders table may not exist in this workspace — log and continue
+          console.warn("clearNormalizedOrders skipped:", deleteErr?.message || deleteErr);
+        }
+      }
       setCustomers([]);
       setRevenueImport(null);
       setRevenueImportRows({});

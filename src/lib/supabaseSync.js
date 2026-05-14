@@ -184,8 +184,14 @@ export async function clearNormalizedOrders(workspaceId = supabaseWorkspaceId) {
     .neq("id", "00000000-0000-0000-0000-000000000000")
     .eq("workspace_id", workspaceId);
   if (error) {
-    console.error("Delete error:", JSON.stringify(error));
-    throw new Error(error.message || error.details || JSON.stringify(error));
+    console.error("clearNormalizedOrders error:", JSON.stringify(error));
+    const msg = error.message || error.details || JSON.stringify(error);
+    // If the table simply doesn't exist in this Supabase project, treat as a no-op
+    if (msg.includes("schema cache") || msg.includes("does not exist") || msg.includes("not found")) {
+      console.warn("orders table not found — skipping normalized delete");
+      return;
+    }
+    throw new Error(msg);
   }
 }
 
