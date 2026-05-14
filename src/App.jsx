@@ -1440,7 +1440,7 @@ export default function App() {
     latestSharedStateRef.current = nextSnapshot;
     void persistSharedSnapshot(nextSnapshot, {});
     setDeduplicateNotice(`Removed ${removedCount} duplicate${removedCount !== 1 ? "s" : ""}. ${deduplicated.length} unique orders remain.`);
-  }, [customers, persistSharedSnapshot]);
+  }, [customers]);
 
   useEffect(() => {
     if (supabaseEnabled) return;
