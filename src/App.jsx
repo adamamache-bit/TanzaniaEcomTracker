@@ -4996,8 +4996,10 @@ export default function App() {
               amount_tsh: row.amount_tsh || existing.amount_tsh || existing.orderTotalTzs || 0,
               amount_usd: row.amount_usd || existing.amount_usd || 0,
               orderTotalTzs: row.amount_tsh || existing.orderTotalTzs || 0,
+              notes: row.notes_raw || existing.notes || "",
               sourceOrderId: existing.sourceOrderId || row.order_id || null,
               order_id: row.order_id || existing.order_id || existing.sourceOrderId || null,
+              external_order_id: row.external_order_id || existing.external_order_id || null,
               import_key: row.import_key || existing.import_key || null,
               normalized_phone: row.normalized_phone || existing.normalized_phone,
               product_ref: row.product_ref || existing.product_ref,
@@ -5009,6 +5011,7 @@ export default function App() {
               lastImportedAt: importFinishedAt,
               lastShippingImportedAt: shippingChanged ? importFinishedAt : existing.lastShippingImportedAt || null,
               updatedAt: row.updated_at || importFinishedAt,
+              assignedTo: row.assignedTo || existing.assignedTo || "Call Center",
               history: statusChanged || shippingChanged || amountChanged
                 ? appendCustomerHistory(
                     existing,
@@ -5051,9 +5054,10 @@ export default function App() {
             amount_tsh: row.amount_tsh,
             amount_usd: row.amount_usd,
             orderTotalTzs: row.amount_tsh,
-            notes: "",
+            notes: row.notes_raw || "",
             sourceOrderId: row.order_id || null,
             order_id: row.order_id || null,
+            external_order_id: row.external_order_id || null,
             import_key: row.import_key,
             normalized_phone: row.normalized_phone,
             product_ref: row.product_ref,
@@ -5065,7 +5069,7 @@ export default function App() {
             lastImportedAt: importFinishedAt,
             lastShippingImportedAt: shippingStatus ? importFinishedAt : null,
             updatedAt: row.updated_at || importFinishedAt,
-            assignedTo: "Call Center",
+            assignedTo: row.assignedTo || "Call Center",
             history: [
               buildHistoryEntry({
                 action: "orders_import_created",
@@ -5177,7 +5181,8 @@ export default function App() {
           if (!code) { _skippedNoCode++; continue; }
 
           const amountTsh = parseLooseNumber(amountCol ? String(row[amountCol] || "0") : "0");
-          const status = shipCol ? String(row[shipCol] || "") : "";
+          const rawStatus = shipCol ? String(row[shipCol] || "") : "";
+          const status = revFormat === "format2" && normalizeStatus(rawStatus) === "cancelled" ? "cancelled after shipping" : rawStatus;
           const city = cityCol ? String(row[cityCol] || "") : "";
           const qty = Math.max(1, parseLooseNumber(qtyCol ? String(row[qtyCol] || "1") : "1") || 1);
 
