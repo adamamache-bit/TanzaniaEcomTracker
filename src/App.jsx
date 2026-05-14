@@ -5309,7 +5309,7 @@ export default function App() {
           const qty = Math.max(1, Number(r.qty || 1));
           deliveredCount++;
           deliveredUnits += qty;
-          serviceChargesUsd += qty * (String(r.city || "").toLowerCase().includes("dar") ? 8 : 9);
+          serviceChargesUsd += (String(r.city || "").toLowerCase().includes("dar") ? 8 : 9);
         }
 
         const data = {
