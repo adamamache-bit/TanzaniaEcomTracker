@@ -1044,6 +1044,7 @@ export default function App() {
   const [clearProductsConfirm, setClearProductsConfirm] = useState(false);
   const [resetOrdersConfirm, setResetOrdersConfirm] = useState(false);
   const [resetOrdersNotice, setResetOrdersNotice] = useState("");
+  const [deduplicateNotice, setDeduplicateNotice] = useState("");
   const [settingsAuditTab, setSettingsAuditTab] = useState("workspace");
   const [showCloudBackups, setShowCloudBackups] = useState(false);
   const [_aiBriefExpanded, _setAiBriefExpanded] = useState(false);
@@ -1408,6 +1409,38 @@ export default function App() {
       setResetOrdersNotice(`Reset failed: ${msg}`);
     }
   }, []);
+
+  const handleDeduplicateOrders = useCallback(() => {
+    const seen = new Map();
+    const deduplicated = [];
+    let removedCount = 0;
+
+    customers.forEach((c) => {
+      const orderId = String(c.sourceOrderId || c.order_id || "").trim();
+      const lineIdx = Math.max(0, Number(c.line_item_index || 0));
+      // Use order_id+line as key; fall back to UUID so unkeyed orders are always kept
+      const key = orderId ? `${orderId}__${lineIdx}` : c.id;
+
+      if (!seen.has(key)) {
+        seen.set(key, deduplicated.length);
+        deduplicated.push(c);
+      } else {
+        // Keep whichever record was imported more recently
+        const existingIdx = seen.get(key);
+        const existing = deduplicated[existingIdx];
+        const existingTs = new Date(existing.lastImportedAt || existing.updatedAt || 0).getTime();
+        const currentTs  = new Date(c.lastImportedAt  || c.updatedAt  || 0).getTime();
+        if (currentTs > existingTs) deduplicated[existingIdx] = c;
+        removedCount += 1;
+      }
+    });
+
+    setCustomers(deduplicated);
+    const nextSnapshot = { ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()), customers: deduplicated };
+    latestSharedStateRef.current = nextSnapshot;
+    void persistSharedSnapshot(nextSnapshot, {});
+    setDeduplicateNotice(`Removed ${removedCount} duplicate${removedCount !== 1 ? "s" : ""}. ${deduplicated.length} unique orders remain.`);
+  }, [customers, persistSharedSnapshot]);
 
   useEffect(() => {
     if (supabaseEnabled) return;
@@ -12876,6 +12909,20 @@ export default function App() {
                       ) : null}
                     </div>
                   )}
+                  <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${cardBorder}` }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: amber, marginBottom: 8 }}>Deduplicate Orders</div>
+                    <div style={{ color: textSoft, fontSize: 13, marginBottom: 12, lineHeight: 1.5 }}>
+                      Scan all {customers.length} orders and remove duplicates, keeping the most recently imported record for each order ID. Safe to run without losing real data.
+                    </div>
+                    <button style={styles.btnSecondary} onClick={handleDeduplicateOrders}>
+                      Deduplicate Now
+                    </button>
+                    {deduplicateNotice ? (
+                      <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 12, background: "rgba(21,143,99,0.08)", color: green, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+                        {deduplicateNotice}
+                      </div>
+                    ) : null}
+                  </div>
                   <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${cardBorder}` }}>
                     <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: red, marginBottom: 8 }}>Reset Orders</div>
                     <div style={{ color: textSoft, fontSize: 13, marginBottom: 12, lineHeight: 1.5 }}>
