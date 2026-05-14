@@ -5,7 +5,7 @@ function normalizeHeaderName(value) {
   return String(value || "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
@@ -26,8 +26,9 @@ export function normalizePhoneNumber(value) {
 
 export function getRowValue(row, aliases = []) {
   const entries = Object.entries(row || {});
-  for (const [key, value] of entries) {
-    if (aliases.includes(normalizeHeaderName(key))) return value;
+  for (const alias of aliases) {
+    const found = entries.find(([key]) => normalizeHeaderName(key) === alias);
+    if (found !== undefined) return found[1];
   }
   return "";
 }
@@ -39,7 +40,33 @@ function splitMultiValue(value) {
     .filter(Boolean);
 }
 
+/**
+ * Detect which Excel format is used based on header names.
+ * Format 1: CODE / AMOUNT / CONF.STATUS / SHIPPING STATUS / RECIPIENT / PRODUCT NAME / PRODUCT QT
+ * Format 2: Id / Total price / Confirmation status / Delivery status / Full name / Product name / Quantity / Order date
+ */
+export function detectExcelFormat(rows) {
+  if (!rows || !rows.length) return { format: "format1", label: "Format 1 (CODE/AMOUNT)" };
+  const keys = Object.keys(rows[0]).map(normalizeHeaderName);
+  if (keys.includes("total price")) return { format: "format2", label: "Format 2 (Id/Total price)" };
+  if (keys.includes("amount")) return { format: "format1", label: "Format 1 (CODE/AMOUNT)" };
+  // Format 2 uses "id" column (no "code")
+  if (keys.includes("id") && !keys.includes("code")) return { format: "format2", label: "Format 2 (Id/Total price)" };
+  return { format: "format1", label: "Format 1 (CODE/AMOUNT)" };
+}
+
 export function parseImportedExcelRows(rows = [], { exchangeRate = DEFAULT_EXCHANGE_RATE, resolveProductId, resolveProductRef } = {}) {
+  const { format, label: formatLabel } = detectExcelFormat(rows);
+
+  // Format-aware aliases: put the format's primary column first so it wins on multi-column files
+  const orderIdAliases = format === "format2"
+    ? ["id", "code", "order id", "orderid", "order no", "reference", "ref"]
+    : ["code", "order id", "orderid", "order no", "reference", "ref", "id"];
+
+  const amountAliases = format === "format2"
+    ? ["total price", "price total", "total amount", "total", "amount", "montant"]
+    : ["amount", "total price", "total", "total amount", "montant", "price total"];
+
   const report = {
     totalRowsImported: rows.length,
     newLeadsAdded: 0,
@@ -57,28 +84,30 @@ export function parseImportedExcelRows(rows = [], { exchangeRate = DEFAULT_EXCHA
   const parsedRows = [];
 
   rows.forEach((row) => {
-    const orderId = String(getRowValue(row, ["code"])).trim();
-    const clientName = String(getRowValue(row, ["recipient", "customer", "customer name", "full name", "name"])).trim();
+    const orderId = String(getRowValue(row, orderIdAliases)).trim();
+    const clientName = String(getRowValue(row, ["full name", "recipient", "customer", "customer name", "name"])).trim();
     const address = String(getRowValue(row, ["address"])).trim();
     const city = String(getRowValue(row, ["city"])).trim();
     const phone = String(getRowValue(row, ["phone"])).trim();
     const normalizedPhone = normalizePhoneNumber(phone);
-    const amountTsh = Math.max(0, parseLooseNumber(getRowValue(row, ["amount", "total", "total amount", "montant", "price total"])));
+    const amountTsh = Math.max(0, parseLooseNumber(getRowValue(row, amountAliases)));
     const productNames = splitMultiValue(getRowValue(row, ["product name", "product", "produit", "item name"]));
     const productRefs = splitMultiValue(getRowValue(row, ["product ref", "product id", "sku", "reference produit"]));
-    const quantityParts = splitMultiValue(getRowValue(row, ["product qt", "quantity", "qty", "quantite"]));
-    const createdAt = String(getRowValue(row, ["created at", "order date", "date"])).trim();
-    const confirmationStatusRaw = String(getRowValue(row, ["conf status", "conf.status", "confirmation status", "status confirmation"])).trim();
+    const quantityParts = splitMultiValue(getRowValue(row, ["quantity", "qty", "product qt", "quantite", "qte"]));
+    const createdAt = String(getRowValue(row, ["order date", "created at", "date"])).trim();
+    const confirmationStatusRaw = String(getRowValue(row, ["confirmation status", "conf status", "conf.status", "status confirmation"])).trim();
     const confirmationUpdatedAt = String(getRowValue(row, ["conf updated at", "conf.updated at", "confirmation updated at"])).trim();
-    const shippingStatusRaw = String(getRowValue(row, ["shipping status", "delivery status", "shipment status"])).trim();
+    const shippingStatusRaw = String(getRowValue(row, ["delivery status", "shipping status", "shipment status"])).trim();
     const updatedAt = String(getRowValue(row, ["updated at"])).trim();
     const extraFields = Object.fromEntries(
       Object.entries(row || {}).filter(([key]) => ![
-        "code", "recipient", "customer", "customer name", "full name", "name", "address", "city", "phone", "amount", "total", "total amount",
-        "montant", "price total", "product name", "product", "produit", "item name", "product ref", "product id", "sku", "reference produit",
-        "product qt", "quantity", "qty", "quantite", "created at", "order date", "date", "conf status", "conf.status", "confirmation status",
-        "status confirmation", "conf updated at", "conf.updated at", "confirmation updated at", "shipping status", "delivery status", "shipment status",
-        "updated at"
+        "code", "id", "recipient", "customer", "customer name", "full name", "name", "address", "city", "phone",
+        "amount", "total price", "total", "total amount", "montant", "price total",
+        "product name", "product", "produit", "item name", "product ref", "product id", "sku", "reference produit",
+        "product qt", "quantity", "qty", "quantite", "qte", "order date", "created at", "date",
+        "confirmation status", "conf status", "conf.status", "status confirmation",
+        "conf updated at", "conf.updated at", "confirmation updated at",
+        "delivery status", "shipping status", "shipment status", "updated at"
       ].includes(normalizeHeaderName(key)))
     );
 
@@ -141,5 +170,5 @@ export function parseImportedExcelRows(rows = [], { exchangeRate = DEFAULT_EXCHA
     }
   });
 
-  return { parsedRows, report };
+  return { parsedRows, report, format, formatLabel };
 }

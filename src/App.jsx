@@ -133,7 +133,7 @@ import {
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
 import { checkNormalizedTablesEmpty, clearNormalizedProducts, deleteExtraChargeFromSupabase, deleteManualAdsSpendFromSupabase, deleteOwnerInjectionFromSupabase, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadExtraChargesFromSupabase, loadManualAdsSpendFromSupabase, loadOwnerInjectionsFromSupabase, loadProfitOverviewFromSupabase, loadRevenueImportFromSupabase, loadRevenueImportRowsFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, saveExtraChargeToSupabase, saveManualAdsSpendToSupabase, saveOwnerInjectionToSupabase, saveRevenueImportRowsToSupabase, saveRevenueImportToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
-import { parseImportedExcelRows } from "./utils/importMapping";
+import { parseImportedExcelRows, detectExcelFormat } from "./utils/importMapping";
 import {
   calculateAvailableStock,
   calculateAvailableStockValue,
@@ -4898,7 +4898,7 @@ export default function App() {
 
         const nextCustomers = [...customers];
         const importFinishedAt = new Date().toISOString();
-        const { parsedRows, report } = parseImportedExcelRows(rows, {
+        const { parsedRows, report, formatLabel } = parseImportedExcelRows(rows, {
           exchangeRate: USD_TO_TZS,
           resolveProductId: resolveImportedProductId,
         });
@@ -5101,10 +5101,11 @@ export default function App() {
         });
         const unmatchedCount = unmatchedProducts.size;
         setOrdersImportNotice(
-          `Excel imported: ${createdCount} new, ${updatedCount} updated, ${skippedCount} skipped${unmatchedCount ? `, ${unmatchedCount} unmatched product(s) imported anyway` : ""}.`
+          `Excel imported (${formatLabel}): ${createdCount} new, ${updatedCount} updated, ${skippedCount} skipped${unmatchedCount ? `, ${unmatchedCount} unmatched product(s) imported anyway` : ""}.`
         );
         const importRecord = {
           detectedHeaders,
+          detectedFormat: formatLabel,
           reasonCounts: {
             missingName: 0,
             missingPhone: report.missingPhoneRows,
@@ -5145,16 +5146,22 @@ export default function App() {
         const rawRows = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
         if (!rawRows.length) { setRevenueImportNotice("File is empty."); return; }
 
-        // Normalize header names once
+        // Detect format then normalize header names
+        const { format: revFormat, label: revFormatLabel } = detectExcelFormat(rawRows);
         const headerMap = {};
         Object.keys(rawRows[0]).forEach((key) => { headerMap[normalizeHeaderName(key)] = key; });
         const getCol = (aliases) => aliases.map((a) => headerMap[a]).find(Boolean);
 
-        const codeCol = getCol(["code", "order id", "orderid", "order no", "reference", "ref"]);
-        const amountCol = getCol(["amount", "total", "total amount", "montant", "prix"]);
-        const shipCol = getCol(["shipping status", "delivery status", "statut livraison", "statut expedition"]);
+        // Format-aware aliases: put the detected format's column name first
+        const codeCol = revFormat === "format2"
+          ? getCol(["id", "code", "order id", "orderid", "order no", "reference", "ref"])
+          : getCol(["code", "order id", "orderid", "order no", "reference", "ref", "id"]);
+        const amountCol = revFormat === "format2"
+          ? getCol(["total price", "price total", "total amount", "total", "amount", "montant"])
+          : getCol(["amount", "total price", "total", "total amount", "montant", "prix"]);
+        const shipCol = getCol(["delivery status", "shipping status", "statut livraison", "statut expedition"]);
         const cityCol = getCol(["city", "ville", "region", "localite"]);
-        const qtyCol = getCol(["quantity", "qty", "quantite", "qte"]);
+        const qtyCol = getCol(["quantity", "qty", "product qt", "quantite", "qte"]);
 
         const exchangeRate = Number(serviceForm?.exchangeRate || USD_TO_TZS);
 
@@ -5214,7 +5221,7 @@ export default function App() {
         writeLS(LS_REVENUE_ROWS, mergedRows);
         writeLS(LS_REVENUE_IMPORT, data);
         setRevenueImportNotice(
-          `Last import: ${new Date().toLocaleDateString()} — ${newCount} new orders added, ${updatedCount} orders updated, ${deliveredCount} total delivered`
+          `Last import: ${new Date().toLocaleDateString()} (${revFormatLabel}) — ${newCount} new orders added, ${updatedCount} orders updated, ${deliveredCount} total delivered`
         );
         if (supabaseEnabled) {
           saveRevenueImportRowsToSupabase(mergedRows).catch(() => {});
@@ -5248,7 +5255,7 @@ export default function App() {
 
         const nextCustomers = [...customers];
         const importFinishedAt = new Date().toISOString();
-        const { parsedRows, report } = parseImportedExcelRows(rows, {
+        const { parsedRows, report, formatLabel: shippingFormatLabel } = parseImportedExcelRows(rows, {
           exchangeRate: USD_TO_TZS,
           resolveProductId: resolveImportedProductId,
         });
@@ -5351,10 +5358,11 @@ export default function App() {
           failurePrefix: "Cloud shipping import sync failed",
         });
         setShippingImportNotice(
-          `Shipping Excel imported: ${updatedCount} updated, ${unchangedCount} unchanged, ${skippedCount} skipped.`
+          `Shipping Excel imported (${shippingFormatLabel}): ${updatedCount} updated, ${unchangedCount} unchanged, ${skippedCount} skipped.`
         );
         setShippingImportDetails({
           detectedHeaders,
+          detectedFormat: shippingFormatLabel,
           reasonCounts: {
             ...reasonCounts,
             missingCode: report.missingCodeRows,
