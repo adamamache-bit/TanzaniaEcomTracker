@@ -5156,18 +5156,28 @@ export default function App() {
         Object.keys(rawRows[0]).forEach((key) => { headerMap[normalizeHeaderName(key)] = key; });
         const getCol = (aliases) => aliases.map((a) => headerMap[a]).find(Boolean);
 
-        // Format-aware aliases: put the detected format's column name first
+        // ── Currency detection ──────────────────────────────────────────────
+        // "Total price (KES)" normalizes to "total price kes" → KES at 131/USD
+        // "Total price" or "AMOUNT"               → TSh at 2850/USD
+        const TSH_RATE = 2850;
+        const KES_RATE = 131;
+        const kesAmountColName = getCol(["total price kes"]); // matches "Total price (KES)"
+        const isKES = Boolean(kesAmountColName);
+        const detectedCurrency = isKES ? "KES" : "TSh";
+        const currencyRate = isKES ? KES_RATE : TSH_RATE;
+
+        // Format-aware aliases for standard amount col (not KES)
+        const stdAmountColName = revFormat === "format2"
+          ? getCol(["total price", "price total", "total amount", "total", "amount", "montant"])
+          : getCol(["amount", "total price", "total", "total amount", "montant", "prix"]);
+        const amountCol = kesAmountColName || stdAmountColName;
+
         const codeCol = revFormat === "format2"
           ? getCol(["id", "code", "order id", "orderid", "order no", "reference", "ref"])
           : getCol(["code", "order id", "orderid", "order no", "reference", "ref", "id"]);
-        const amountCol = revFormat === "format2"
-          ? getCol(["total price", "price total", "total amount", "total", "amount", "montant"])
-          : getCol(["amount", "total price", "total", "total amount", "montant", "prix"]);
         const shipCol = getCol(["delivery status", "shipping status", "statut livraison", "statut expedition"]);
         const cityCol = getCol(["city", "ville", "region", "localite"]);
-        const qtyCol = getCol(["quantity", "qty", "product qt", "quantite", "qte"]);
-
-        const exchangeRate = Number(serviceForm?.exchangeRate || USD_TO_TZS);
+        const qtyCol  = getCol(["quantity", "qty", "product qt", "quantite", "qte"]);
 
         // Start with the existing rows map (deduplicate by CODE)
         const mergedRows = { ...revenueImportRows };
@@ -5180,28 +5190,39 @@ export default function App() {
           const code = codeCol ? String(row[codeCol] || "").trim() : "";
           if (!code) { _skippedNoCode++; continue; }
 
-          const amountTsh = parseLooseNumber(amountCol ? String(row[amountCol] || "0") : "0");
+          const amountOriginal = parseLooseNumber(amountCol ? String(row[amountCol] || "0") : "0");
+          const amountUsd      = amountOriginal / currencyRate;
+          const amountTsh      = amountUsd * TSH_RATE; // always store TSh-equivalent for consistent display
+
           const rawStatus = shipCol ? String(row[shipCol] || "") : "";
           const status = revFormat === "format2" && normalizeStatus(rawStatus) === "cancelled" ? "cancelled after shipping" : rawStatus;
           const city = cityCol ? String(row[cityCol] || "") : "";
-          const qty = Math.max(1, parseLooseNumber(qtyCol ? String(row[qtyCol] || "1") : "1") || 1);
+          const qty  = Math.max(1, parseLooseNumber(qtyCol ? String(row[qtyCol] || "1") : "1") || 1);
 
-          if (mergedRows[code]) {
-            updatedCount++;
-          } else {
-            newCount++;
-          }
-          mergedRows[code] = { amount_tsh: amountTsh, status, city, qty, imported_at: importedAt };
+          if (mergedRows[code]) { updatedCount++; } else { newCount++; }
+          mergedRows[code] = {
+            amount_original: amountOriginal,
+            currency: detectedCurrency,
+            amount_usd: amountUsd,
+            amount_tsh: amountTsh,
+            status,
+            city,
+            qty,
+            imported_at: importedAt,
+          };
         }
 
-        // Recalculate totals from ALL stored rows (delivered only) — prevents any double-counting
+        // Recalculate totals from ALL stored rows (delivered only) — prevents double-counting
         let revenueTsh = 0;
+        let revenueUsd = 0;
         let deliveredCount = 0;
         let deliveredUnits = 0;
         let serviceChargesUsd = 0;
         for (const r of Object.values(mergedRows)) {
           if (!isShippingDelivered(r.status)) continue;
+          // amount_tsh is always the TSh-equivalent regardless of original currency
           revenueTsh += Number(r.amount_tsh || 0);
+          revenueUsd += Number(r.amount_usd || (Number(r.amount_tsh || 0) / TSH_RATE));
           const qty = Math.max(1, Number(r.qty || 1));
           deliveredCount++;
           deliveredUnits += qty;
@@ -5210,7 +5231,7 @@ export default function App() {
 
         const data = {
           revenueTsh,
-          revenueUsd: revenueTsh / exchangeRate,
+          revenueUsd,
           deliveredCount,
           deliveredUnits,
           serviceChargesUsd,
@@ -5219,14 +5240,21 @@ export default function App() {
           totalStoredOrders: Object.keys(mergedRows).length,
           lastImportNewCount: newCount,
           lastImportUpdatedCount: updatedCount,
+          detectedCurrency,
+          currencyRate,
         };
 
         setRevenueImportRows(mergedRows);
         setRevenueImport(data);
         writeLS(LS_REVENUE_ROWS, mergedRows);
         writeLS(LS_REVENUE_IMPORT, data);
+        const currencyLabel = isKES
+          ? `KES · rate 1 USD = ${KES_RATE} KES`
+          : `TSh · rate 1 USD = ${TSH_RATE} TSh`;
         setRevenueImportNotice(
-          `Last import: ${new Date().toLocaleDateString()} (${revFormatLabel}) — ${newCount} new orders added, ${updatedCount} orders updated, ${deliveredCount} total delivered`
+          `Last import: ${new Date().toLocaleDateString()} (${revFormatLabel} · ${currencyLabel}) — ` +
+          `${newCount} new, ${updatedCount} updated, ${deliveredCount} delivered · ` +
+          `Revenue: ${formatUSD(revenueUsd)} / TSh ${Math.round(revenueTsh).toLocaleString()}`
         );
         if (supabaseEnabled) {
           saveRevenueImportRowsToSupabase(mergedRows).catch(() => {});
@@ -5237,7 +5265,7 @@ export default function App() {
       }
       event.target.value = "";
     },
-    [serviceForm, revenueImportRows]
+    [revenueImportRows]
   );
 
   const importShippingFromExcel = useCallback(
