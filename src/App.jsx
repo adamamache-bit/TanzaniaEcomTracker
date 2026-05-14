@@ -132,7 +132,7 @@ import {
   USD_TO_TZS,
 } from "./lib/appLogic";
 import { supabaseEnabled, supabaseWorkspaceId } from "./lib/supabaseClient";
-import { checkNormalizedTablesEmpty, clearNormalizedProducts, deleteExtraChargeFromSupabase, deleteManualAdsSpendFromSupabase, deleteOwnerInjectionFromSupabase, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadExtraChargesFromSupabase, loadManualAdsSpendFromSupabase, loadOwnerInjectionsFromSupabase, loadProfitOverviewFromSupabase, loadRevenueImportFromSupabase, loadRevenueImportRowsFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, saveExtraChargeToSupabase, saveManualAdsSpendToSupabase, saveOwnerInjectionToSupabase, saveRevenueImportRowsToSupabase, saveRevenueImportToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
+import { checkNormalizedTablesEmpty, clearNormalizedOrders, clearNormalizedProducts, deleteExtraChargeFromSupabase, deleteManualAdsSpendFromSupabase, deleteOwnerInjectionFromSupabase, loadAdsCampaignsFromSupabase, loadAdsSpendByProductFromSupabase, loadExtraChargesFromSupabase, loadManualAdsSpendFromSupabase, loadOwnerInjectionsFromSupabase, loadProfitOverviewFromSupabase, loadRevenueImportFromSupabase, loadRevenueImportRowsFromSupabase, loadWorkspaceFromNormalizedTables, migrateWorkspaceToNormalizedTables, saveAdsCampaignsToSupabase, saveExtraChargeToSupabase, saveManualAdsSpendToSupabase, saveOwnerInjectionToSupabase, saveRevenueImportRowsToSupabase, saveRevenueImportToSupabase, syncNormalizedTables } from "./lib/supabaseSync";
 import { parseImportedExcelRows, detectExcelFormat } from "./utils/importMapping";
 import {
   calculateAvailableStock,
@@ -1042,6 +1042,8 @@ export default function App() {
   const [migrating, setMigrating] = useState(false);
   const [syncNotice, setSyncNotice] = useState("");
   const [clearProductsConfirm, setClearProductsConfirm] = useState(false);
+  const [resetOrdersConfirm, setResetOrdersConfirm] = useState(false);
+  const [resetOrdersNotice, setResetOrdersNotice] = useState("");
   const [settingsAuditTab, setSettingsAuditTab] = useState("workspace");
   const [showCloudBackups, setShowCloudBackups] = useState(false);
   const [_aiBriefExpanded, _setAiBriefExpanded] = useState(false);
@@ -1378,6 +1380,25 @@ export default function App() {
       setMigrating(false);
     }
   }, [cloudAuth.user, applySharedStateSnapshot]);
+
+  const handleResetOrders = useCallback(async () => {
+    setResetOrdersNotice("Clearing...");
+    try {
+      if (supabaseEnabled) await clearNormalizedOrders();
+      setCustomers([]);
+      setRevenueImport(null);
+      setRevenueImportRows({});
+      writeLS(LS_REVENUE_ROWS, {});
+      writeLS(LS_REVENUE_IMPORT, null);
+      const nextSnapshot = { ...(latestSharedStateRef.current || getDefaultCloudWorkspaceState()), customers: [] };
+      latestSharedStateRef.current = nextSnapshot;
+      void persistSharedSnapshot(nextSnapshot, {});
+      setResetOrdersConfirm(false);
+      setResetOrdersNotice("Orders cleared. You can now re-import your Excel files.");
+    } catch (err) {
+      setResetOrdersNotice(`Reset failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
 
   useEffect(() => {
     if (supabaseEnabled) return;
@@ -4911,6 +4932,17 @@ export default function App() {
         const unknownShippingStatuses = new Set();
         const orderMovements = [];
 
+        // Pre-build O(1) lookup map by sourceOrderId so re-imports after page reload don't create duplicates
+        // (import_key is not persisted to Supabase, so we fall back to order_id + line index)
+        const sourceOrderIdMap = new Map();
+        nextCustomers.forEach((c, idx) => {
+          const id = String(c.sourceOrderId || c.order_id || "").trim();
+          if (id) {
+            const lineIdx = Math.max(0, Number(c.line_item_index || 0));
+            sourceOrderIdMap.set(`${id}__${lineIdx}`, idx);
+          }
+        });
+
         parsedRows.forEach((row) => {
           const productId = row.productId || resolveImportedProductId(row.product_ref || row.product_name);
           if (!row.client_name) {
@@ -4953,17 +4985,26 @@ export default function App() {
 
           const confirmationStatus = normalizedConfirmation ? normalizeOrderStatus(normalizedConfirmation) : "new-order";
           const shippingStatus = normalizedShipping ? normalizeOrderStatus(normalizedShipping) : "";
-          const existingIndex = findMatchingCustomerIndex(nextCustomers, {
-            import_key: row.import_key,
-            sourceOrderId: row.order_id,
-            customerName: row.client_name,
-            phone: row.phone,
-            productId,
-            product_ref: row.product_ref,
-            quantity: row.quantity,
-            orderDate: excelDateToInput(row.created_at),
-            line_item_index: row.line_item_index,
-          });
+
+          // Try fast O(1) lookup by order_id first, then fall back to fuzzy match
+          let existingIndex = -1;
+          if (row.order_id) {
+            const mapKey = `${row.order_id}__${Math.max(0, Number(row.line_item_index || 0))}`;
+            existingIndex = sourceOrderIdMap.get(mapKey) ?? -1;
+          }
+          if (existingIndex < 0) {
+            existingIndex = findMatchingCustomerIndex(nextCustomers, {
+              import_key: row.import_key,
+              sourceOrderId: row.order_id,
+              customerName: row.client_name,
+              phone: row.phone,
+              productId,
+              product_ref: row.product_ref,
+              quantity: row.quantity,
+              orderDate: excelDateToInput(row.created_at),
+              line_item_index: row.line_item_index,
+            });
+          }
 
           if (existingIndex >= 0) {
             const existing = nextCustomers[existingIndex];
@@ -12826,6 +12867,28 @@ export default function App() {
                       ) : null}
                     </div>
                   )}
+                  <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${cardBorder}` }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.45, textTransform: "uppercase", color: red, marginBottom: 8 }}>Reset Orders</div>
+                    <div style={{ color: textSoft, fontSize: 13, marginBottom: 12, lineHeight: 1.5 }}>
+                      Delete all order records and revenue import history. Products, ads, stock purchases, and financial entries are kept intact. Use this to clean duplicate data before re-importing.
+                    </div>
+                    {resetOrdersConfirm ? (
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: red }}>Confirm — this cannot be undone.</span>
+                        <button style={{ ...styles.btnPrimary, background: red, borderColor: red }} onClick={() => void handleResetOrders()}>Yes, delete all orders</button>
+                        <button style={styles.btnSecondary} onClick={() => { setResetOrdersConfirm(false); setResetOrdersNotice(""); }}>Cancel</button>
+                      </div>
+                    ) : (
+                      <button style={{ ...styles.btnSecondary, borderColor: red, color: red }} onClick={() => setResetOrdersConfirm(true)}>
+                        Reset Orders &amp; Revenue
+                      </button>
+                    )}
+                    {resetOrdersNotice ? (
+                      <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 12, background: resetOrdersNotice.startsWith("Orders cleared") ? "rgba(21,143,99,0.08)" : "rgba(217,72,95,0.08)", color: resetOrdersNotice.startsWith("Orders cleared") ? green : red, fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+                        {resetOrdersNotice}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
                 <div style={{ ...styles.card, padding: 18 }}>
                   <div style={styles.sectionEyebrow}>Exports & restore</div>

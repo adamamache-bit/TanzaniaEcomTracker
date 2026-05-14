@@ -176,6 +176,12 @@ export async function clearNormalizedProducts(workspaceId = supabaseWorkspaceId)
   if (error) throw error;
 }
 
+export async function clearNormalizedOrders(workspaceId = supabaseWorkspaceId) {
+  if (!supabaseEnabled || !supabase) return;
+  const { error } = await supabase.from("orders").delete().eq("workspace_id", workspaceId);
+  if (error) throw error;
+}
+
 // Fire-and-forget: sync all normalized tables in parallel. Errors are silently swallowed.
 export async function syncNormalizedTables(snapshot = {}, workspaceId = supabaseWorkspaceId) {
   if (!supabaseEnabled || !supabase) return;
