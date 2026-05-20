@@ -1037,7 +1037,7 @@ export default function App() {
   const [ownerInjectionForm, setOwnerInjectionForm] = useState({ date: "", amountUsd: "", amountTsh: "", notes: "" });
   const [ownerInjectionNotice, setOwnerInjectionNotice] = useState("");
   const [simProductName, setSimProductName] = useState("");
-  const [simInputs, setSimInputs] = useState({ totalLeads: "", confirmationRate: "", deliveryRate: "", cpl: "", sellingPriceTsh: "", productCostUsd: "", serviceFeePerUnit: "9" });
+  const [simInputs, setSimInputs] = useState({ totalLeads: "", confirmationRate: "", deliveryRate: "", cpl: "", sellingPriceTsh: "", productCostUsd: "", serviceFeePerUnit: "9", serviceCommissionPct: "0" });
   const [migrateNotice, setMigrateNotice] = useState("");
   const [migrating, setMigrating] = useState(false);
   const [syncNotice, setSyncNotice] = useState("");
@@ -12403,6 +12403,7 @@ export default function App() {
                 const sellingPriceTsh = n("sellingPriceTsh");
                 const productCostUsd = n("productCostUsd");
                 const serviceFee = n("serviceFeePerUnit") || 9;
+                const serviceCommissionPct = n("serviceCommissionPct") / 100;
 
                 const confirmedLeads = totalLeads * confirmRate;
                 const deliveredLeads = confirmedLeads * delivRate;
@@ -12412,12 +12413,14 @@ export default function App() {
                 const productCostTotal = deliveredLeads * productCostUsd;
                 const serviceFeeTotal = deliveredLeads * serviceFee;
                 const sellingPriceUsd = sellingPriceTsh / xrSim;
+                const serviceCommissionUsd = sellingPriceUsd * serviceCommissionPct;
+                const serviceCommissionTotal = deliveredLeads * serviceCommissionUsd;
                 const adsCostPerDelivered = deliveredLeads > 0 ? totalAdsSpend / deliveredLeads : 0;
-                const profitPerUnit = sellingPriceUsd - productCostUsd - adsCostPerDelivered - serviceFee;
+                const profitPerUnit = sellingPriceUsd - productCostUsd - adsCostPerDelivered - serviceFee - serviceCommissionUsd;
                 const totalProfitUsd = deliveredLeads * profitPerUnit;
                 const totalProfitTsh = totalProfitUsd * xrSim;
                 const maxCpl = deliveredLeads > 0 && totalLeads > 0
-                  ? (sellingPriceUsd - productCostUsd - serviceFee) * (deliveredLeads / totalLeads)
+                  ? (sellingPriceUsd - productCostUsd - serviceFee - serviceCommissionUsd) * (deliveredLeads / totalLeads)
                   : 0;
                 const roi = totalAdsSpend > 0 ? (totalProfitUsd / totalAdsSpend) * 100 : 0;
                 const hasInputs = totalLeads > 0 && deliveredLeads > 0;
@@ -12453,6 +12456,7 @@ export default function App() {
                         {simField("Selling Price (TSh)", "sellingPriceTsh", { placeholder: "50000" })}
                         {simField("Product Cost (USD)", "productCostUsd", { step: "0.01", placeholder: "5.00" })}
                         {simField("Service Fee / Unit (USD)", "serviceFeePerUnit", { step: "0.01", placeholder: "9" })}
+                        {simField("Service Commission % (on revenue)", "serviceCommissionPct", { step: "0.01", placeholder: "5" })}
                       </div>
                     </div>
 
@@ -12482,6 +12486,7 @@ export default function App() {
                           { label: "Revenue", value: hasInputs ? formatUSD(revenueUsd) : "—", sub: hasInputs ? formatTZS(revenueTsh) : "", color: green },
                           { label: "− Product Cost", value: hasInputs ? formatUSD(productCostTotal) : "—", sub: hasInputs ? `$${productCostUsd.toFixed(2)} × ${Math.round(deliveredLeads)} units` : "", color: amber },
                           { label: "− Service Fees", value: hasInputs ? formatUSD(serviceFeeTotal) : "—", sub: hasInputs ? `$${serviceFee} × ${Math.round(deliveredLeads)} units` : "", color: amber },
+                          { label: "− Service Commission", value: hasInputs ? formatUSD(serviceCommissionTotal) : "—", sub: hasInputs && serviceCommissionPct > 0 ? `${(serviceCommissionPct * 100).toFixed(1)}% of revenue` : "0% — not set", color: amber },
                           { label: "− Ads Spend", value: hasInputs ? formatUSD(totalAdsSpend) : "—", sub: hasInputs ? `$${cpl.toFixed(2)} CPL × ${Math.round(totalLeads)} leads` : "", color: amber },
                         ].map((row, i, arr) => (
                           <div key={row.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: i < arr.length - 1 ? `1px solid ${cardBorder}` : "none" }}>
