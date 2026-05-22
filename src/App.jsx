@@ -5309,7 +5309,9 @@ export default function App() {
           const qty = Math.max(1, Number(r.qty || 1));
           deliveredCount++;
           deliveredUnits += qty;
-          serviceChargesUsd += (String(r.city || "").toLowerCase().includes("dar") ? 8 : 9);
+          // $7 flat + 5% of order amount in USD, per delivered order regardless of region
+          const orderAmountUsd = (parseFloat(r.amount_tsh) || 0) / 2850;
+          serviceChargesUsd += 7 + (orderAmountUsd * 0.05);
         }
 
         const data = {
@@ -12402,7 +12404,9 @@ export default function App() {
                 const cpl = n("cpl");
                 const sellingPriceTsh = n("sellingPriceTsh");
                 const productCostUsd = n("productCostUsd");
-                const serviceFee = n("serviceFeePerUnit") || 9;
+                const sellingPriceUsd = sellingPriceTsh / xrSim;
+                const defaultServiceFee = 7 + (sellingPriceUsd * 0.05);
+                const serviceFee = n("serviceFeePerUnit") || defaultServiceFee;
                 const serviceCommissionPct = n("serviceCommissionPct") / 100;
 
                 const confirmedLeads = totalLeads * confirmRate;
@@ -12412,7 +12416,6 @@ export default function App() {
                 const revenueUsd = revenueTsh / xrSim;
                 const productCostTotal = deliveredLeads * productCostUsd;
                 const serviceFeeTotal = deliveredLeads * serviceFee;
-                const sellingPriceUsd = sellingPriceTsh / xrSim;
                 const serviceCommissionUsd = sellingPriceUsd * serviceCommissionPct;
                 const serviceCommissionTotal = deliveredLeads * serviceCommissionUsd;
                 const adsCostPerDelivered = deliveredLeads > 0 ? totalAdsSpend / deliveredLeads : 0;
@@ -12455,7 +12458,7 @@ export default function App() {
                         {simField("CPL — Cost Per Lead (USD)", "cpl", { step: "0.01", placeholder: "0.50" })}
                         {simField("Selling Price (TSh)", "sellingPriceTsh", { placeholder: "50000" })}
                         {simField("Product Cost (USD)", "productCostUsd", { step: "0.01", placeholder: "5.00" })}
-                        {simField("Service Fee / Unit (USD)", "serviceFeePerUnit", { step: "0.01", placeholder: "9" })}
+                        {simField("Service Fee / Unit (USD)", "serviceFeePerUnit", { step: "0.01", placeholder: sellingPriceTsh > 0 ? defaultServiceFee.toFixed(2) : "7 + 5% of price" })}
                         {simField("Service Commission % (on revenue)", "serviceCommissionPct", { step: "0.01", placeholder: "5" })}
                       </div>
                     </div>
